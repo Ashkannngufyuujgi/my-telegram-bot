@@ -29,7 +29,7 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"user_map": {}, "next_id": 1000, "blocked": [], "msg_count": {}, "msg_dates": {}, "msg_total": {}}
+    return {"user_map": {}, "next_id": 1000, "blocked": [], "msg_count": {}, "msg_dates": {}, "msg_total": {}, "challenge_done": {}, "challenge_counts": {}, "feelings_jar": {}}
 
 def save_data():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -40,6 +40,9 @@ data["user_map"] = {str(k): v for k, v in data["user_map"].items()}
 data.setdefault("msg_count", {})
 data.setdefault("msg_dates", {})
 data.setdefault("msg_total", {})  # NEW: تعداد کل پیام‌های ارسالی برای گیمیفیکیشن
+data.setdefault("challenge_done", {})   # NEW: uid -> تاریخی که چالش انجام داده
+data.setdefault("challenge_counts", {}) # NEW: uid -> تعداد کل چالش‌های انجام‌شده
+data.setdefault("feelings_jar", {})     # NEW: uid -> [{date, emoji}]
 
 
 def get_or_create_code(uid: int) -> int:
@@ -137,7 +140,59 @@ def get_daily_fal(uid: int) -> tuple:
     return FAL_POOL[seed]
 
 
-# ---------- NEW: تست شخصیت ----------
+# ---------- NEW: چالش روزانه ----------
+CHALLENGE_POOL = [
+    ("🌸", "امروز به یه نفر که مدتیه باهاش حرف نزدی پیام بده."),
+    ("☀️", "صبح از پنجره به آسمون نگاه کن و یه چیز قشنگ توش پیدا کن."),
+    ("📖", "یه صفحه از یه کتاب بخون، حتی اگه حوصله نداشتی."),
+    ("🎵", "یه آهنگ که دوست داری با صدای بلند گوش بده."),
+    ("💌", "یه چیز مثبت درباره خودت روی کاغذ بنویس."),
+    ("🌿", "۱۰ دقیقه از گوشی دور باش و فقط نفس بکش."),
+    ("🍵", "یه چیز گرم بنوش و آروم بشین، بدون گوشی."),
+    ("🌙", "امشب قبل از خواب ۳ تا چیزی که امروز ازشون ممنونی بنویس."),
+    ("💃", "یه موزیک شاد بذار و ۲ دقیقه برقص، حتی اگه تنها باشی."),
+    ("🎨", "یه چیزی بکش، حتی اگه نقاشی بلد نیستی. هر چیزی."),
+    ("🌺", "به یه نفر بگو که دوستش داری یا بهش اهمیت می‌دی."),
+    ("🧘", "۵ دقیقه چشماتو ببند و به هیچی فکر نکن."),
+    ("📸", "از یه چیز قشنگ اطرافت عکس بگیر."),
+    ("🍫", "امروز یه چیز کوچیک به خودت هدیه بده."),
+    ("🚶", "۱۰ دقیقه پیاده‌روی کن، حتی توی خونه."),
+    ("⭐", "یه آرزو بکن و باور کن که ممکنه."),
+    ("🦋", "یه عادت بد امروز رو نکن، فقط یه روز."),
+    ("🌊", "یه لیوان آب بنوش و به بدنت مهربون باش."),
+    ("💫", "یه چیزی که مدتیه ازش فرار می‌کنی رو امروز شروع کن."),
+    ("🎀", "یه لباس یا چیزی که خوشحالت می‌کنه بپوش."),
+    ("🌻", "به یه نفر لبخند بزن، حتی غریبه."),
+    ("🔮", "یه چیز جدید امتحان کن، هر چیزی."),
+    ("🍀", "سه تا چیز خوب که امروز داری رو بشمار."),
+    ("🕊️", "یه نفر رو ببخش، حتی توی ذهنت."),
+    ("🌈", "یه رنگ شاد بپوش یا دورت بذار."),
+    ("💎", "به خودت نگاه کن توی آینه و یه چیز قشنگ ببین."),
+    ("🌝", "زودتر از همیشه بخواب امشب."),
+    ("🍓", "یه میوه یا چیز سالم بخور با حوصله."),
+    ("🪷", "یه موزیک آروم گوش بده و فقط حس کن."),
+    ("✨", "امروز یه نفر رو تحسین کن و بهش بگو."),
+]
+
+def get_daily_challenge(uid: int) -> tuple:
+    today = str(date.today())
+    seed = hash(f"ch_{uid}_{today}") % len(CHALLENGE_POOL)
+    return CHALLENGE_POOL[seed]
+
+def has_done_challenge_today(uid: int) -> bool:
+    return data["challenge_done"].get(str(uid)) == str(date.today())
+
+def mark_challenge_done(uid: int):
+    uid_str = str(uid)
+    data["challenge_done"][uid_str] = str(date.today())
+    data["challenge_counts"][uid_str] = data["challenge_counts"].get(uid_str, 0) + 1
+    save_data()
+
+def get_challenge_count(uid: int) -> int:
+    return data["challenge_counts"].get(str(uid), 0)
+
+
+
 PERSONALITY_QUESTIONS = [
     {
         "q": "وقتی ناراحتی چیکار می‌کنی؟",
@@ -191,6 +246,60 @@ def personality_keyboard(q_index: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+    return InlineKeyboardMarkup(rows)
+
+
+# ---------- NEW: شیشه احساسات ----------
+FEELING_EMOJIS = ["😊", "😢", "😡", "😍", "😰", "😴", "🥳", "🫠", "💪", "🥺"]
+
+FEELING_LABELS = {
+    "😊": "شاد", "😢": "غمگین", "😡": "عصبانی", "😍": "عاشق",
+    "😰": "نگران", "😴": "خسته", "🥳": "هیجان‌زده", "🫠": "بی‌حال",
+    "💪": "قوی", "🥺": "دلتنگ"
+}
+
+def feelings_jar_keyboard() -> InlineKeyboardMarkup:
+    buttons = [InlineKeyboardButton(e, callback_data=f"jar_{e}") for e in FEELING_EMOJIS]
+    rows = [buttons[:5], buttons[5:]]
+    return InlineKeyboardMarkup(rows)
+
+def add_feeling(uid: int, emoji: str):
+    uid_str = str(uid)
+    if uid_str not in data["feelings_jar"]:
+        data["feelings_jar"][uid_str] = []
+    data["feelings_jar"][uid_str].append({"date": str(date.today()), "emoji": emoji})
+    # فقط ۳۰ روز آخر نگه می‌داریم
+    data["feelings_jar"][uid_str] = data["feelings_jar"][uid_str][-30:]
+    save_data()
+
+def build_jar_summary(uid: int) -> str:
+    uid_str = str(uid)
+    entries = data["feelings_jar"].get(uid_str, [])
+    if not entries:
+        return "شیشه‌ات خالیه! هنوز هیچ احساسی ثبت نکردی. 🫙"
+
+    from collections import Counter
+    counts = Counter(e["emoji"] for e in entries)
+    total = len(entries)
+    top_emoji, top_count = counts.most_common(1)[0]
+    top_label = FEELING_LABELS.get(top_emoji, "")
+
+    lines = [f"🫙 شیشه احساسات تو ({total} روز ثبت‌شده):\n"]
+    for emoji, count in counts.most_common():
+        label = FEELING_LABELS.get(emoji, "")
+        bar = "█" * count
+        lines.append(f"{emoji} {label}: {bar} ({count})")
+
+    lines.append(f"\n💬 بیشتر از همه {top_emoji} {top_label} بودی.")
+    return "\n".join(lines)
+
+def build_jar_summary_by_code(code: int) -> str:
+    uid = find_uid_by_code(code)
+    if not uid:
+        return "کاربر پیدا نشد."
+    return build_jar_summary(uid)
+
+
 # ---------- NEW: برچسب احساسی - ایموجی‌های قابل انتخاب ----------
 EMOTION_EMOJIS = ["😊", "😢", "😡", "😍", "😂", "🤔", "😱", "🙏"]
 
@@ -227,7 +336,7 @@ def run_server():
 
 # ---------- منوی دکمه‌ای پایین صفحه ----------
 MAIN_MENU = ReplyKeyboardMarkup(
-    [["📝 پیام جدید", "ℹ️ راهنما"], ["📊 آمار من", "🔮 فال امروز"], ["🧠 تست شخصیت"]],
+    [["📝 پیام جدید", "ℹ️ راهنما"], ["📊 آمار من", "🔮 فال امروز"], ["🧠 تست شخصیت", "🎯 چالش امروز"], ["🫙 شیشه احساسات"]],
     resize_keyboard=True
 )
 
@@ -273,7 +382,8 @@ async def mystats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"پیام‌های امروز: {sent_today}\n"
         f"کل پیام‌های ارسالی: {total_sent}\n\n"
         f"🏅 رتبه فعلی: {rank}\n"
-        f"⬆️ {next_rank}",
+        f"⬆️ {next_rank}\n\n"
+        f"🎯 چالش‌های انجام‌شده: {get_challenge_count(uid)} تا",
         reply_markup=MAIN_MENU
     )
 
@@ -299,6 +409,12 @@ async def handle_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if text == "🧠 تست شخصیت":
         await personality_start(update, context)
+        return
+    if text == "🎯 چالش امروز":
+        await challenge_cmd(update, context)
+        return
+    if text == "🫙 شیشه احساسات":
+        await feelings_jar_cmd(update, context)
         return
 
     if is_blocked(uid):
@@ -409,6 +525,134 @@ async def personality_answer_handler(update: Update, context: ContextTypes.DEFAU
             f"💬 {desc}\n\n"
             f"می‌تونی دوباره امتحان کنی یا پیام ناشناس بفرستی 💌"
         )
+
+
+# NEW: چالش روزانه
+async def challenge_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    emoji, text = get_daily_challenge(uid)
+    count = get_challenge_count(uid)
+    done_today = has_done_challenge_today(uid)
+
+    if done_today:
+        await update.message.reply_text(
+            f"✅ چالش امروزت رو انجام دادی! خوووبی 🎉\n\n"
+            f"🎯 کل چالش‌های انجام‌شده: {count}\n\n"
+            f"فردا برگرد برای چالش جدید 💪",
+            reply_markup=MAIN_MENU
+        )
+        return
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ انجامش دادم!", callback_data="challenge_done"),
+        InlineKeyboardButton("🔄 بعداً", callback_data="challenge_later"),
+    ]])
+    await update.message.reply_text(
+        f"{emoji} چالش امروز تو:\n\n{text}\n\n"
+        f"🎯 چالش‌های قبلی: {count} تا\n\n"
+        "وقتی انجامش دادی بگو 👇",
+        reply_markup=keyboard
+    )
+
+
+async def challenge_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+
+    if query.data == "challenge_done":
+        if has_done_challenge_today(uid):
+            await query.message.edit_text("قبلاً ثبت شده بود! ✅")
+            return
+        mark_challenge_done(uid)
+        count = get_challenge_count(uid)
+        await query.message.edit_text(
+            f"🎉 آفرین! چالش امروزت ثبت شد.\n\n"
+            f"🏅 کل چالش‌های انجام‌شده: {count} تا\n\n"
+            f"{'🔥 داری می‌درخشی!' if count >= 10 else '💪 همینطور ادامه بده!'}"
+        )
+    elif query.data == "challenge_later":
+        await query.message.edit_text(
+            "باشه! یادت نره امروز انجامش بدی 😊\n"
+            "هر وقت آماده شدی دوباره بزن روی 🎯 چالش امروز"
+        )
+
+
+# NEW: شیشه احساسات - نمایش و ثبت
+async def feelings_jar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    uid_str = str(uid)
+    entries = data["feelings_jar"].get(uid_str, [])
+    today = str(date.today())
+    already_today = any(e["date"] == today for e in entries)
+
+    summary = build_jar_summary(uid)
+
+    if already_today:
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📊 خلاصه احساساتم", callback_data="jar_summary"),
+        ]])
+        await update.message.reply_text(
+            f"{summary}\n\n✅ امروز قبلاً احساست رو ثبت کردی.\nفردا برگرد 🫙",
+            reply_markup=keyboard
+        )
+    else:
+        await update.message.reply_text(
+            f"{summary}\n\n امروز چه حسی داری؟ 👇",
+            reply_markup=feelings_jar_keyboard()
+        )
+
+
+async def feelings_jar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+
+    if query.data == "jar_summary":
+        summary = build_jar_summary(uid)
+        await query.message.edit_text(summary)
+        return
+
+    emoji = query.data.replace("jar_", "")
+    if emoji not in FEELING_EMOJIS:
+        return
+
+    today = str(date.today())
+    uid_str = str(uid)
+    entries = data["feelings_jar"].get(uid_str, [])
+    if any(e["date"] == today for e in entries):
+        await query.message.edit_text("امروز قبلاً ثبت کردی! 🫙 فردا برگرد.")
+        return
+
+    add_feeling(uid, emoji)
+    label = FEELING_LABELS.get(emoji, "")
+    await query.message.edit_text(
+        f"{emoji} احساس «{label}» برای امروز ثبت شد!\n\n"
+        f"هر روز که بیای و احساستو ثبت کنی، شیشه‌ات پر‌تر می‌شه 🫙"
+    )
+
+
+# NEW: دستور ادمین برای دیدن شیشه احساسات هر کاربر
+async def jar_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        code = int(context.args[0])
+        summary = build_jar_summary_by_code(code)
+        await update.message.reply_text(f"🫙 شیشه احساسات کد {code}:\n\n{summary}")
+    except (IndexError, ValueError):
+        # نمایش لیست همه کاربرایی که داده دارن
+        if not data["feelings_jar"]:
+            await update.message.reply_text("هنوز هیچ کسی احساسی ثبت نکرده.")
+            return
+        lines = ["🫙 کاربرایی که احساس ثبت کردن:\n"]
+        for uid_str, entries in data["feelings_jar"].items():
+            if not entries:
+                continue
+            code = data["user_map"].get(uid_str, "؟")
+            lines.append(f"کد {code} — {len(entries)} ثبت")
+        lines.append("\nبرای دیدن جزئیات: /jar کد")
+        await update.message.reply_text("\n".join(lines))
 
 
 async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, msg_id: int):
@@ -595,6 +839,8 @@ def main():
     app.add_handler(CommandHandler("block", block_cmd))
     app.add_handler(CommandHandler("unblock", unblock_cmd))
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
+    # NEW: دستور ادمین برای شیشه احساسات
+    app.add_handler(CommandHandler("jar", jar_admin_cmd))
 
     app.add_handler(CallbackQueryHandler(reply_button_handler, pattern=r"^reply_\d+$"))
     app.add_handler(CallbackQueryHandler(confirm_send_handler, pattern=r"^(confirm_send|cancel_send)$"))
@@ -602,6 +848,10 @@ def main():
     app.add_handler(CallbackQueryHandler(emotion_handler, pattern=r"^emotion_.+$"))
     # NEW: هندلر تست شخصیت
     app.add_handler(CallbackQueryHandler(personality_answer_handler, pattern=r"^pq_\d+_.+$"))
+    # NEW: هندلر چالش روزانه
+    app.add_handler(CallbackQueryHandler(challenge_callback_handler, pattern=r"^challenge_(done|later)$"))
+    # NEW: هندلر شیشه احساسات
+    app.add_handler(CallbackQueryHandler(feelings_jar_callback, pattern=r"^jar_.+$"))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
     app.add_handler(MessageHandler(
