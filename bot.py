@@ -20,6 +20,7 @@ logging.basicConfig(
 
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")  # مثلاً @mychannel
 
 DATA_FILE = "data.json"
 
@@ -82,6 +83,54 @@ def log_message_to_file(uid: int, code: int, content: str):
             f.write(f"[{date.today()}] uid={uid} code={code} | {content}\n")
     except Exception:
         logging.exception("خطا در ثبت لاگ پیام")
+
+
+# ---------- عضویت اجباری ----------
+async def is_member(bot, uid: int) -> bool:
+    if not CHANNEL_USERNAME:
+        return True
+    try:
+        member = await bot.get_chat_member(CHANNEL_USERNAME, uid)
+        return member.status in ("member", "administrator", "creator")
+    except Exception:
+        return False
+
+def join_keyboard() -> InlineKeyboardMarkup:
+    channel = CHANNEL_USERNAME.lstrip("@") if CHANNEL_USERNAME else ""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{channel}")],
+        [InlineKeyboardButton("✅ عضو شدم، تأیید کن", callback_data="check_join")],
+    ])
+
+async def check_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """اگه عضو نبود پیام نشون بده و False برگردونه"""
+    uid = update.effective_user.id
+    if uid == ADMIN_ID:
+        return True
+    if not await is_member(context.bot, uid):
+        await update.message.reply_text(
+            "🔒 برای استفاده از ربات باید اول عضو کانال ما بشی 👇\n\n"
+            "بعد از عضویت دکمه «✅ عضو شدم» رو بزن.",
+            reply_markup=join_keyboard()
+        )
+        return False
+    return True
+
+async def check_join_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid = query.from_user.id
+    if await is_member(context.bot, uid):
+        await query.message.edit_text(
+            "✅ عضویتت تأیید شد! خوش اومدی 🎉\n\nحالا می‌تونی پیام بفرستی 👇"
+        )
+        get_or_create_code(uid)
+        await context.bot.send_message(
+            uid,
+            "هر پیامی بفرستی، به‌صورت کاملاً ناشناس برای ادمین ارسال می‌شه 🔒",
+            reply_markup=MAIN_MENU
+        )
+    else:
+        await query.answer("❌ هنوز عضو کانال نشدی!", show_alert=True)
 
 
 # ---------- پیام‌های تأیید ارسال ----------
@@ -400,6 +449,17 @@ HELP_TEXT = (
 # ---------- دستورات کاربر ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+
+    # چک عضویت در استارت
+    if uid != ADMIN_ID and not await is_member(context.bot, uid):
+        await update.message.reply_text(
+            "👋 سلام!\n\n"
+            "🔒 برای استفاده از ربات باید اول عضو کانال ما بشی 👇\n\n"
+            "بعد از عضویت دکمه «✅ عضو شدم» رو بزن.",
+            reply_markup=join_keyboard()
+        )
+        return
+
     get_or_create_code(uid)
     await update.message.reply_text(
         "🎉 به ربات پیام ناشناس خوش اومدی!\n\n"
@@ -459,6 +519,10 @@ async def handle_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if text == "🫙 شیشه احساسات":
         await feelings_jar_cmd(update, context)
+        return
+
+    # چک عضویت قبل از ارسال پیام
+    if not await check_membership(update, context):
         return
 
     if is_blocked(uid):
@@ -689,7 +753,6 @@ async def jar_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("\n".join(lines))
 
 
-
 async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, msg_id: int):
     query = update.callback_query
     uid = query.from_user.id
@@ -734,7 +797,6 @@ async def read_receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     try:
         await context.bot.send_message(uid, "👁 ادمین پیامتو خوند!")
-        # دکمه رو از پیام ادمین برمی‌داریم
         await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("✏️ پاسخ", callback_data=f"reply_{parts[1]}"),
             InlineKeyboardButton("✅ خونده شد", callback_data="noop"),
@@ -871,6 +933,10 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def media_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
+    # چک عضویت برای مدیا
+    if not await check_membership(update, context):
+        return
+
     if is_blocked(uid):
         await update.message.reply_text("⛔️ شما توسط ادمین مسدود شده‌اید.", reply_markup=MAIN_MENU)
         return
@@ -897,6 +963,9 @@ def main():
     app.add_handler(CommandHandler("unblock", unblock_cmd))
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("jar", jar_admin_cmd))
+
+    # هندلر تأیید عضویت
+    app.add_handler(CallbackQueryHandler(check_join_handler, pattern=r"^check_join$"))
 
     app.add_handler(CallbackQueryHandler(reply_button_handler, pattern=r"^reply_\d+$"))
     app.add_handler(CallbackQueryHandler(read_receipt_handler, pattern=r"^read_\d+_\d+$"))
