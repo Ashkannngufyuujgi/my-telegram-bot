@@ -1,8 +1,14 @@
 import os
+import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
@@ -26,6 +32,7 @@ def run_server():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global next_id
     uid = update.effective_user.id
+    logging.info(f"دستور /start از کاربر {uid}")
 
     if uid not in user_map:
         user_map[uid] = next_id
@@ -38,6 +45,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global next_id
     uid = update.effective_user.id
     text = update.message.text
+    logging.info(f"پیام از کاربر {uid}: {text}")
 
     if uid not in user_map:
         user_map[uid] = next_id
@@ -77,15 +85,25 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("کاربر پیدا نشد")
 
-    except:
+    except Exception as e:
+        logging.exception("خطا در دستور reply")
         await update.message.reply_text("خطا در دستور")
 
 
-if __name__ == "__main__":
+def main():
+    logging.info(f"TOKEN موجود است: {bool(TOKEN)}")
+    logging.info(f"ADMIN_ID: {ADMIN_ID}")
+
     threading.Thread(target=run_server, daemon=True).start()
 
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reply", reply))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
+
+    logging.info("شروع polling...")
     app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
