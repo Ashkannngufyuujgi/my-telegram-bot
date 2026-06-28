@@ -107,6 +107,90 @@ def get_next_rank_info(uid: int) -> str:
     return "بالاترین رتبه رو داری! 🎉"
 
 
+# ---------- NEW: فال روزانه (بر اساس کد کاربر + تاریخ — هر نفر فال خودش رو داره) ----------
+FAL_POOL = [
+    ("🌸", "امروز یه اتفاق کوچیک قلبت رو گرم می‌کنه. چشماتو باز نگه‌دار."),
+    ("🌙", "شب امشب برات رازی داره. افکارت رو بنویس، جواب توشونه."),
+    ("⭐", "یه نفر بهت فکر می‌کنه که فکرشو نمی‌کنی. لبخند بزن."),
+    ("🦋", "تغییری در راهه. نترس، بال‌هات قوی‌تر از اونیه که فکر می‌کنی."),
+    ("🌊", "امروز جاری باش. با جریان زندگی بجنگ نه با خودت."),
+    ("🌺", "یه فرصت دم دسته. فقط کافیه دستتو دراز کنی."),
+    ("🔮", "چیزی که گمش کردی، دوباره پیدا می‌شه. صبور باش."),
+    ("🌈", "بعد از این ابرا، رنگ‌های قشنگی در راهه. نزدیکه."),
+    ("💫", "انرژیت امروز خاصه. هر کاری بخوای می‌تونی شروع کنی."),
+    ("🍀", "شانس امروزت بیشتر از دیروزه. یه ریسک کوچیک بکن."),
+    ("🌻", "آفتاب درونتو کسی نمی‌تونه خاموش کنه. درخشش."),
+    ("🕊️", "آروم باش. جواب یه سوال قدیمی امروز بهت می‌رسه."),
+    ("💎", "ارزشت رو دست کم نگیر. کسی هست که چشمش دنبالته."),
+    ("🌿", "امروز به خودت مهربون باش. استراحت هم پیشرفته."),
+    ("🎀", "یه خبر خوب در راهه. صبر کن، دیر نیست."),
+    ("🌝", "امشب آرامش داری. ذهنتو خاموش کن و فقط نفس بکش."),
+    ("🍓", "شیرینی‌ای در راهه که انتظارشو نداری. آماده باش."),
+    ("🪷", "دلت یه چیزی می‌خواد که ازش فرار می‌کنی. وقتشه."),
+    ("✨", "اتفاق‌های خوب به آدم‌های صبور می‌رسن. تو صبوری."),
+    ("🌓", "نیمه‌ی تاریک روزت زود تموم می‌شه. نور داره میاد."),
+]
+
+def get_daily_fal(uid: int) -> tuple:
+    today = str(date.today())
+    seed = hash(f"{uid}_{today}") % len(FAL_POOL)
+    return FAL_POOL[seed]
+
+
+# ---------- NEW: تست شخصیت ----------
+PERSONALITY_QUESTIONS = [
+    {
+        "q": "وقتی ناراحتی چیکار می‌کنی؟",
+        "opts": [("تنها می‌شم و فکر می‌کنم 🌙", "i"), ("با یکی حرف می‌زنم 🌸", "e"),
+                 ("گوش می‌دم به موزیک 🎵", "a"), ("سرم رو شلوغ می‌کنم 🔥", "f")]
+    },
+    {
+        "q": "محیط ایده‌آلت کدومه؟",
+        "opts": [("طبیعت و سکوت 🌿", "n"), ("کافه شلوغ ☕", "e"),
+                 ("خونه و راحتی 🛋️", "i"), ("هر جایی که دوستام باشن 🌺", "s")]
+    },
+    {
+        "q": "بیشتر به چی اهمیت می‌دی؟",
+        "opts": [("احساسات ❤️", "f"), ("منطق 🧩", "t"),
+                 ("خلاقیت 🎨", "a"), ("نظم و برنامه 📋", "j")]
+    },
+    {
+        "q": "وقت آزاد داری چیکار می‌کنی؟",
+        "opts": [("کتاب یا فیلم 📚", "i"), ("بیرون می‌رم با دوستام 🌸", "e"),
+                 ("چیزی خلق می‌کنم 🎨", "a"), ("استراحت می‌کنم 🌙", "n")]
+    },
+    {
+        "q": "دوست داری چطور شناخته بشی؟",
+        "opts": [("مرموز و جذاب 🌙", "m"), ("مهربون و گرم ❤️", "f"),
+                 ("باهوش و خلاق ✨", "a"), ("شاد و پرانرژی 🌟", "e")]
+    },
+]
+
+PERSONALITY_RESULTS = {
+    "i": ("🌙 روح شبانه", "عمیقی، رازآلودی و دنیای درونت خیلی غنیه. هر چیزی رو حس می‌کنی، فقط نشونش نمی‌دی.", "🐺 گرگ"),
+    "e": ("🌸 روح اجتماعی", "انرژیت مسری‌ه! هر جا می‌ری گرما می‌بری. آدم‌ها دورت جمع می‌شن بدون اینکه بدونن چرا.", "🦋 پروانه"),
+    "a": ("🎨 روح هنری", "دنیا رو متفاوت می‌بینی. خلاقیتت یه هدیه‌ست که خیلی‌ها ندارن.", "🦚 طاووس"),
+    "f": ("❤️ روح احساساتی", "قلبت بزرگه و عمیق دوست می‌داری. این یه قدرته، نه ضعف.", "🌺 گل سرخ"),
+    "n": ("🌿 روح آزاد", "به آزادی و آرامش نیاز داری. طبیعت روحته و کمتر کسی تو رو درک می‌کنه.", "🦌 آهو"),
+    "m": ("🌑 روح مرموز", "لایه‌های زیادی داری که کمتر کسی بهشون می‌رسه. این جذابیتته.", "🐈‍⬛ گربه سیاه"),
+    "s": ("☀️ روح شاد", "انرژی مثبتت همه چیز رو روشن می‌کنه. دنیا با تو رنگی‌تره.", "🌻 آفتابگردان"),
+    "t": ("🧩 روح تحلیلگر", "ذهنت همیشه کار می‌کنه. عمیق فکر می‌کنی و کمتر کسی به پات می‌رسه.", "🦉 جغد"),
+    "j": ("📋 روح منظم", "قابل اعتمادی و پایه‌ای. هر جمعی به یه نفر مثل تو نیاز داره.", "🐝 زنبور"),
+}
+
+def get_personality_result(answers: list) -> tuple:
+    from collections import Counter
+    count = Counter(answers)
+    top = count.most_common(1)[0][0]
+    return PERSONALITY_RESULTS.get(top, PERSONALITY_RESULTS["f"])
+
+def personality_keyboard(q_index: int) -> InlineKeyboardMarkup:
+    q = PERSONALITY_QUESTIONS[q_index]
+    rows = [[InlineKeyboardButton(opt, callback_data=f"pq_{q_index}_{val}")]
+            for opt, val in q["opts"]]
+    return InlineKeyboardMarkup(rows)
+
+
 # ---------- NEW: برچسب احساسی - ایموجی‌های قابل انتخاب ----------
 EMOTION_EMOJIS = ["😊", "😢", "😡", "😍", "😂", "🤔", "😱", "🙏"]
 
@@ -143,7 +227,7 @@ def run_server():
 
 # ---------- منوی دکمه‌ای پایین صفحه ----------
 MAIN_MENU = ReplyKeyboardMarkup(
-    [["📝 پیام جدید", "ℹ️ راهنما"], ["📊 آمار من"]],
+    [["📝 پیام جدید", "ℹ️ راهنما"], ["📊 آمار من", "🔮 فال امروز"], ["🧠 تست شخصیت"]],
     resize_keyboard=True
 )
 
@@ -210,6 +294,12 @@ async def handle_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "📝 پیام جدید":
         await update.message.reply_text("بفرما، پیامت رو بنویس یا بفرست 👇", reply_markup=MAIN_MENU)
         return
+    if text == "🔮 فال امروز":
+        await fal_cmd(update, context)
+        return
+    if text == "🧠 تست شخصیت":
+        await personality_start(update, context)
+        return
 
     if is_blocked(uid):
         await update.message.reply_text("⛔️ شما توسط ادمین مسدود شده‌اید.", reply_markup=MAIN_MENU)
@@ -268,6 +358,57 @@ async def emotion_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]])
 
     await query.message.edit_text(preview, reply_markup=confirm_keyboard)
+
+
+# NEW: فال روزانه
+async def fal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    emoji, text = get_daily_fal(uid)
+    await update.message.reply_text(
+        f"{emoji} فال امروز تو:\n\n{text}\n\n✨ فردا برگرد برای فال جدید!",
+        reply_markup=MAIN_MENU
+    )
+
+
+# NEW: شروع تست شخصیت
+async def personality_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["pq_answers"] = []
+    await update.message.reply_text(
+        "🧠 تست شخصیت شروع شد!\n۵ سوال داریم، صادقانه انتخاب کن 💫\n\n"
+        f"سوال ۱ از ۵:\n{PERSONALITY_QUESTIONS[0]['q']}",
+        reply_markup=personality_keyboard(0)
+    )
+
+
+# NEW: هندلر جواب‌های تست شخصیت
+async def personality_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    _, q_index_str, val = query.data.split("_", 2)
+    q_index = int(q_index_str)
+
+    answers = context.user_data.get("pq_answers", [])
+    answers.append(val)
+    context.user_data["pq_answers"] = answers
+
+    next_q = q_index + 1
+
+    if next_q < len(PERSONALITY_QUESTIONS):
+        await query.message.edit_text(
+            f"سوال {next_q + 1} از {len(PERSONALITY_QUESTIONS)}:\n{PERSONALITY_QUESTIONS[next_q]['q']}",
+            reply_markup=personality_keyboard(next_q)
+        )
+    else:
+        title, desc, animal = get_personality_result(answers)
+        context.user_data["pq_answers"] = []
+        await query.message.edit_text(
+            f"✨ نتیجه تست شخصیت تو:\n\n"
+            f"🏷️ {title}\n"
+            f"🐾 روح حیوانیت: {animal}\n\n"
+            f"💬 {desc}\n\n"
+            f"می‌تونی دوباره امتحان کنی یا پیام ناشناس بفرستی 💌"
+        )
 
 
 async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, msg_id: int):
@@ -459,6 +600,8 @@ def main():
     app.add_handler(CallbackQueryHandler(confirm_send_handler, pattern=r"^(confirm_send|cancel_send)$"))
     # NEW: هندلر انتخاب ایموجی
     app.add_handler(CallbackQueryHandler(emotion_handler, pattern=r"^emotion_.+$"))
+    # NEW: هندلر تست شخصیت
+    app.add_handler(CallbackQueryHandler(personality_answer_handler, pattern=r"^pq_\d+_.+$"))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
     app.add_handler(MessageHandler(
