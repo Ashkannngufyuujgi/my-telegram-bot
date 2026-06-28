@@ -212,13 +212,18 @@ async def fetch_prices() -> str:
 
 async def price_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """نمایش قیمت لحظه‌ای"""
-    msg = await update.message.reply_text("⏳ در حال دریافت قیمت‌ها...", reply_markup=MAIN_MENU)
+    waiting_msg = await update.message.reply_text("⏳ در حال دریافت قیمت‌ها...")
     try:
         text = await fetch_prices()
-        await msg.edit_text(text, parse_mode="Markdown")
-    except Exception as e:
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_MENU)
+    except Exception:
         logging.exception("خطا در price_cmd")
-        await msg.edit_text("⚠️ خطا در دریافت قیمت‌ها. لطفاً بعداً دوباره امتحان کن.")
+        await update.message.reply_text("⚠️ خطا در دریافت قیمت‌ها. لطفاً بعداً دوباره امتحان کن.", reply_markup=MAIN_MENU)
+    finally:
+        try:
+            await waiting_msg.delete()
+        except Exception:
+            pass
 
 
 # ---------- فال روزانه ----------
