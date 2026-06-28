@@ -2,8 +2,6 @@ import os
 import json
 import logging
 import threading
-import asyncio
-import aiohttp
 from datetime import date
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import (
@@ -86,6 +84,55 @@ def log_message_to_file(uid: int, code: int, content: str):
         logging.exception("خطا در ثبت لاگ پیام")
 
 
+# ---------- پیام‌های تأیید ارسال ----------
+SEND_CONFIRMATIONS = [
+    "🌊 پیامت مثل یه بطری تو دریا فرستاده شد...",
+    "🕊️ کبوترت پر زد و رفت!",
+    "🚀 پیامت با سرعت نور پرتاب شد!",
+    "🌙 رازت تو شب گم شد...",
+    "🎯 تیر از کمون رفت!",
+    "💌 نامه‌ات تو باد رها شد...",
+    "🌿 پیامت مثل برگ روی آب شناور شد...",
+    "🔮 جادو شد و فرستاده شد!",
+    "⚡ مثل برق رفت!",
+    "🌸 گلبرگت پرواز کرد...",
+    "🎭 نقابت محکمه، پیامت رفت!",
+    "🌌 پیامت تو کهکشان گم شد...",
+    "🎪 شو شروع شد، پیامت رفت!",
+    "🦋 پروانه‌ات پر زد!",
+    "🌊 موج برد، تو ساحلی...",
+    "🕯️ شمعت روشنه، رازت رفت...",
+    "🎵 نت آخر نواخته شد!",
+    "🌙 ماه دیدش، بقیه نه...",
+    "🌿 باد برد، دریا می‌دونه...",
+    "💫 ستاره‌ای شد و رفت...",
+    "🎁 بسته‌بندی شد، راهی شد!",
+    "🔑 در قفل شد، کلید دستته...",
+    "🌺 عطرت پیچید تو هوا...",
+    "🎲 تاس انداختی، رفت!",
+    "🌊 زیر امواج پنهونه...",
+    "🦅 عقاب برد تو آسمون!",
+    "🎯 هدف گرفتی، شلیک کردی!",
+    "🌙 شب نگهش می‌داره...",
+    "🔮 آینه دیدش، فراموش کرد!",
+    "💎 گنجینه‌ای شد تو اعماق...",
+    "🌸 بهار برد، پاییز نمی‌دونه!",
+    "🎭 پرده افتاد، صحنه خالی شد!",
+    "🚂 قطار رفت، ریل خالیه...",
+    "🌌 سیاهچاله بلعیدش!",
+    "🎪 سیرک تموم شد، اثری نموند!",
+    "🌊 اقیانوس قبول کرد...",
+    "🦉 جغد شب می‌دونه، دیگران نه!",
+    "🔥 آتیش گرفت و خاکستر شد!",
+    "🌿 جنگل قبولش کرد...",
+    "⭐ بین میلیون‌ها ستاره گم شد!",
+]
+
+import random as _random
+def get_send_confirmation() -> str:
+    return _random.choice(SEND_CONFIRMATIONS)
+
+
 # ---------- گیمیفیکیشن ----------
 RANKS = [
     (0,   "🌱 تازه‌وارد"),
@@ -108,258 +155,6 @@ def get_next_rank_info(uid: int) -> str:
         if total < threshold:
             return f"{threshold - total} پیام تا رتبه {title}"
     return "بالاترین رتبه رو داری! 🎉"
-
-
-# ---------- قیمت لحظه‌ای ----------
-
-def fmt_toman(value: float) -> str:
-    return f"{int(value):,}"
-
-def fmt_usd(value: float) -> str:
-    if value >= 1:
-        return f"${value:,.2f}"
-    elif value >= 0.01:
-        return f"${value:.4f}"
-    else:
-        return f"${value:.6f}"
-
-BROWSER_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "application/json",
-    "Accept-Language": "en-US,en;q=0.9",
-}
-
-COIN_EMOJI = {
-    "bitcoin": "₿", "ethereum": "Ξ", "tether": "💲",
-    "binancecoin": "🔶", "solana": "◎", "xrp": "〽️",
-    "usd-coin": "💵", "dogecoin": "🐶", "cardano": "🔵",
-    "tron": "🔴", "avalanche-2": "🏔️", "shiba-inu": "🐕",
-    "polkadot": "⚪", "chainlink": "🔗", "matic-network": "🟣",
-}
-
-async def fetch_irr_prices(session: aiohttp.ClientSession) -> dict:
-    result = {}
-
-    # اول چک می‌کنیم ادمین نرخ دستی تنظیم کرده یا نه
-    manual_usd = os.getenv("USD_TOMAN")
-    if manual_usd:
-        try:
-            result["usd"] = float(manual_usd)
-            logging.info(f"USD rate from env: {result['usd']} toman")
-        except ValueError:
-            pass
-
-    # اگه نرخ دستی نبود، از API های ایرانی بگیر (نرخ بازار آزاد)
-    if not result.get("usd"):
-        IRAN_APIS = [
-            {
-                "url": "https://brsapi.ir/FreeTsetmcBourseApi/Api_Free_Gold_Currency.json",
-                "extractor": lambda j: float(
-                    next((
-                        item.get("price", 0)
-                        for item in j.get("currency", [])
-                        if str(item.get("symbol", "")).upper() in ("USD", "DOLLAR", "دلار")
-                    ), 0)
-                )
-            },
-            {
-                "url": "https://brsapi.ir/FreeTsetmcBourseApi/Api_Free_Gold_Currency_v2.json",
-                "extractor": lambda j: float((j.get("USD") or j.get("usd") or {}).get("price", 0))
-            },
-            {
-                "url": "https://api.priceto.day/v1/latest/irr/usd",
-                "extractor": lambda j: float(j.get("price", 0)) / 10  # IRR به تومان
-            },
-        ]
-        for api in IRAN_APIS:
-            try:
-                async with session.get(
-                    api["url"],
-                    headers=BROWSER_HEADERS,
-                    timeout=aiohttp.ClientTimeout(total=8)
-                ) as resp:
-                    if resp.status == 200:
-                        j = await resp.json(content_type=None)
-                        price = api["extractor"](j)
-                        if price > 10000:  # sanity check
-                            result["usd"] = price
-                            logging.info(f"USD from {api['url']}: {price}")
-                            break
-                        else:
-                            logging.warning(f"USD price too low from {api['url']}: {price} — raw: {str(j)[:300]}")
-            except Exception as e:
-                logging.warning(f"Iran USD API error ({api['url']}): {e}")
-
-    # طلا از metals.live بر اساس نرخ بازار آزاد
-    irr_per_usd = result.get("usd", 0)
-    if irr_per_usd > 0:
-        try:
-            async with session.get(
-                "https://api.metals.live/v1/spot",
-                headers=BROWSER_HEADERS,
-                timeout=aiohttp.ClientTimeout(total=8)
-            ) as resp:
-                if resp.status == 200:
-                    metals = await resp.json(content_type=None)
-                    gold_usd_oz = 0
-                    for item in metals:
-                        if isinstance(item, dict):
-                            gold_usd_oz = float(item.get("gold") or 0)
-                            if gold_usd_oz > 0:
-                                break
-                    if gold_usd_oz > 0:
-                        gold_usd_gram = gold_usd_oz / 31.1035
-                        gold18_usd = gold_usd_gram * 0.75
-                        result["gold18"] = gold18_usd * irr_per_usd
-                        result["mesghal"] = gold18_usd * 4.608 * irr_per_usd
-        except Exception as e:
-            logging.warning(f"metals.live error: {e}")
-
-    return result
-
-
-async def fetch_crypto_prices(session: aiohttp.ClientSession) -> list:
-    try:
-        async with session.get(
-            "https://api.coingecko.com/api/v3/coins/markets",
-            params={
-                "vs_currency": "usd",
-                "order": "market_cap_desc",
-                "per_page": 10,
-                "page": 1,
-                "sparkline": "false",
-                "price_change_percentage": "24h",
-            },
-            headers=BROWSER_HEADERS,
-            timeout=aiohttp.ClientTimeout(total=12)
-        ) as resp:
-            if resp.status == 200:
-                coins = await resp.json(content_type=None)
-                if isinstance(coins, list) and len(coins) > 0:
-                    return [
-                        {
-                            "id": c.get("id", ""),
-                            "symbol": c.get("symbol", "").upper(),
-                            "name": c.get("name", ""),
-                            "price": float(c.get("current_price") or 0),
-                            "change24h": float(c.get("price_change_percentage_24h") or 0),
-                        }
-                        for c in coins
-                    ]
-    except Exception as e:
-        logging.warning(f"CoinGecko خطا: {e}")
-
-    try:
-        async with session.get(
-            "https://api.coincap.io/v2/assets",
-            params={"limit": 10},
-            headers=BROWSER_HEADERS,
-            timeout=aiohttp.ClientTimeout(total=12)
-        ) as resp:
-            if resp.status == 200:
-                j = await resp.json(content_type=None)
-                assets = j.get("data", [])
-                return [
-                    {
-                        "id": a.get("id", ""),
-                        "symbol": (a.get("symbol") or "").upper(),
-                        "name": a.get("name", ""),
-                        "price": float(a.get("priceUsd") or 0),
-                        "change24h": float(a.get("changePercent24Hr") or 0),
-                    }
-                    for a in assets
-                ]
-    except Exception as e:
-        logging.warning(f"CoinCap خطا: {e}")
-
-    return []
-
-async def fetch_prices() -> str:
-    lines = []
-    usd_buy = 0
-
-    async with aiohttp.ClientSession() as session:
-        irr, crypto = await asyncio.gather(
-            fetch_irr_prices(session),
-            fetch_crypto_prices(session),
-            return_exceptions=True
-        )
-
-    if isinstance(irr, dict) and irr.get("usd"):
-        usd_buy = irr["usd"]
-        gold18 = irr.get("gold18", 0)
-        mesghal = irr.get("mesghal", 0)
-
-        lines.append("<b>💵 ارز و طلا</b> (تومان | دلار)\n")
-        lines.append(f"🇺🇸 دلار آمریکا: <code>{fmt_toman(usd_buy)}</code> تومان")
-        if gold18:
-            lines.append(f"🥇 طلا ۱۸ عیار (هر گرم): <code>{fmt_toman(gold18)}</code> تومان | <code>{fmt_usd(gold18 / usd_buy)}</code>")
-        if mesghal:
-            lines.append(f"🪙 مثقال طلا: <code>{fmt_toman(mesghal)}</code> تومان | <code>{fmt_usd(mesghal / usd_buy)}</code>")
-    else:
-        lines.append("<b>💵 ارز و طلا</b>\n⚠️ در حال حاضر قیمت دریافت نشد. بعداً امتحان کن.")
-
-    lines.append("")
-
-    if isinstance(crypto, list) and len(crypto) > 0:
-        lines.append("<b>🪙 ۱۰ ارز دیجیتال برتر</b> (دلار | تومان)\n")
-        for coin in crypto:
-            cid = coin["id"]
-            symbol = coin["symbol"]
-            name = coin["name"]
-            price_usd = coin["price"]
-            change_24h = coin["change24h"]
-            arrow = "📈" if change_24h >= 0 else "📉"
-            emoji = COIN_EMOJI.get(cid, "🔹")
-            toman_str = f" | <code>{fmt_toman(int(price_usd * usd_buy))}</code> تومان" if usd_buy and price_usd * usd_buy > 0 else ""
-            lines.append(
-                f"{emoji} {name} ({symbol}): <code>{fmt_usd(price_usd)}</code>{toman_str} {arrow} {change_24h:+.1f}%"
-            )
-    else:
-        lines.append("<b>🪙 ارز دیجیتال</b>\n⚠️ در حال حاضر قیمت دریافت نشد. بعداً امتحان کن.")
-
-    lines.append(f"\n🕐 آخرین بروزرسانی: {date.today()}")
-    return "\n".join(lines)
-
-
-async def debugprice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    results = []
-    urls = [
-        ("brsapi v1", "https://brsapi.ir/FreeTsetmcBourseApi/Api_Free_Gold_Currency.json", "json"),
-        ("brsapi v2", "https://brsapi.ir/FreeTsetmcBourseApi/Api_Free_Gold_Currency_v2.json", "json"),
-        ("priceto.day", "https://api.priceto.day/v1/latest/irr/usd", "json"),
-    ]
-    async with aiohttp.ClientSession() as session:
-        for name, url, kind in urls:
-            try:
-                async with session.get(url, headers=BROWSER_HEADERS, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                    body = await resp.text()
-                    snippet = body[:400].replace("<", "&lt;").replace(">", "&gt;")
-                    results.append(f"✅ {name} [{resp.status}]\n<code>{snippet}</code>")
-            except Exception as e:
-                results.append(f"❌ {name}: {e}")
-    await update.message.reply_text("\n\n".join(results), parse_mode="HTML")
-
-
-async def price_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    waiting_msg = await update.message.reply_text("⏳ در حال دریافت قیمت‌ها...")
-    try:
-        text = await fetch_prices()
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=MAIN_MENU)
-    except Exception as e:
-        logging.exception("خطا در price_cmd")
-        await update.message.reply_text(
-            f"⚠️ خطای دقیق:\n<code>{str(e)[:300]}</code>",
-            parse_mode="HTML",
-            reply_markup=MAIN_MENU
-        )
-    finally:
-        try:
-            await waiting_msg.delete()
-        except Exception:
-            pass
 
 
 # ---------- فال روزانه ----------
@@ -587,7 +382,7 @@ MAIN_MENU = ReplyKeyboardMarkup(
         ["📝 پیام جدید", "ℹ️ راهنما"],
         ["📊 آمار من", "🔮 فال امروز"],
         ["🧠 تست شخصیت", "🎯 چالش امروز"],
-        ["🫙 شیشه احساسات", "💹 قیمت لحظه‌ای"],
+        ["🫙 شیشه احساسات"],
     ],
     resize_keyboard=True
 )
@@ -599,7 +394,6 @@ HELP_TEXT = (
     "• قبل از ارسال نهایی، یه حس انتخاب می‌کنی، بعد تأیید می‌کنی.\n"
     "• اگه ادمین جواب بده، همینجا برات پیام میاد.\n"
     "• با ارسال پیام بیشتر، رتبه‌ات بالاتر می‌ره! 🏆\n"
-    "• با 💹 قیمت لحظه‌ای طلا، دلار و ارز دیجیتال رو ببین."
 )
 
 
@@ -666,9 +460,6 @@ async def handle_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🫙 شیشه احساسات":
         await feelings_jar_cmd(update, context)
         return
-    if text == "💹 قیمت لحظه‌ای":
-        await price_cmd(update, context)
-        return
 
     if is_blocked(uid):
         await update.message.reply_text("⛔️ شما توسط ادمین مسدود شده‌اید.", reply_markup=MAIN_MENU)
@@ -698,10 +489,11 @@ async def confirm_send_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.message.edit_text("پیامی برای ارسال پیدا نشد.")
         return
 
-    await deliver_to_admin(update, context, msg_id)
+    sent_msg = await deliver_to_admin(update, context, msg_id)
     context.user_data["pending_message"] = None
     context.user_data["selected_emotion"] = None
-    await query.message.edit_text("✅ پیام شما با موفقیت ارسال شد.")
+    confirmation = get_send_confirmation()
+    await query.message.edit_text(f"✅ {confirmation}")
 
 
 async def emotion_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -897,22 +689,6 @@ async def jar_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("\n".join(lines))
 
 
-async def setusd_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    try:
-        rate = float(context.args[0].replace(",", ""))
-        if rate < 10000:
-            await update.message.reply_text("❌ عدد خیلی کمه. مثال: /setusd 95000")
-            return
-        os.environ["USD_TOMAN"] = str(rate)
-        await update.message.reply_text(f"✅ نرخ دلار تنظیم شد: {int(rate):,} تومان")
-    except (IndexError, ValueError):
-        current = os.getenv("USD_TOMAN", "تنظیم نشده")
-        await update.message.reply_text(
-            f"نرخ فعلی: {current}\n\nبرای تنظیم: /setusd عدد\nمثال: /setusd 95000"
-        )
-
 
 async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, msg_id: int):
     query = update.callback_query
@@ -924,9 +700,10 @@ async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     emotion_text = f"حس کاربر: {emotion}\n" if emotion else ""
 
     caption_prefix = f"📩 پیام جدید\nکد کاربر: {code}\n{emotion_text}\n"
-    keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("✏️ پاسخ", callback_data=f"reply_{code}")]]
-    )
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✏️ پاسخ", callback_data=f"reply_{code}"),
+        InlineKeyboardButton("👁 خوندم", callback_data=f"read_{code}_{uid}"),
+    ]])
 
     try:
         await context.bot.copy_message(
@@ -943,6 +720,31 @@ async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         log_message_to_file(uid, code, "پیام/مدیا ارسال شد")
     except Exception:
         logging.exception("خطا در ارسال پیام به ادمین")
+
+
+# ---------- هندلر خوندم ----------
+async def read_receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("✅ علامت‌گذاری شد!")
+    if query.from_user.id != ADMIN_ID:
+        return
+
+    parts = query.data.split("_")  # read_{code}_{uid}
+    uid = int(parts[2])
+
+    try:
+        await context.bot.send_message(uid, "👁 ادمین پیامتو خوند!")
+        # دکمه رو از پیام ادمین برمی‌داریم
+        await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✏️ پاسخ", callback_data=f"reply_{parts[1]}"),
+            InlineKeyboardButton("✅ خونده شد", callback_data="noop"),
+        ]]))
+    except Exception:
+        logging.exception("خطا در ارسال read receipt")
+
+
+async def noop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
 
 
 # ---------- دستورات ادمین ----------
@@ -1095,11 +897,10 @@ def main():
     app.add_handler(CommandHandler("unblock", unblock_cmd))
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("jar", jar_admin_cmd))
-    app.add_handler(CommandHandler("setusd", setusd_cmd))
-    app.add_handler(CommandHandler("price", price_cmd))
-    app.add_handler(CommandHandler("debugprice", debugprice_cmd))
 
     app.add_handler(CallbackQueryHandler(reply_button_handler, pattern=r"^reply_\d+$"))
+    app.add_handler(CallbackQueryHandler(read_receipt_handler, pattern=r"^read_\d+_\d+$"))
+    app.add_handler(CallbackQueryHandler(noop_handler, pattern=r"^noop$"))
     app.add_handler(CallbackQueryHandler(confirm_send_handler, pattern=r"^(confirm_send|cancel_send)$"))
     app.add_handler(CallbackQueryHandler(emotion_handler, pattern=r"^emotion_.+$"))
     app.add_handler(CallbackQueryHandler(personality_answer_handler, pattern=r"^pq_\d+_.+$"))
