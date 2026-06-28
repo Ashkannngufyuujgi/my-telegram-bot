@@ -115,8 +115,9 @@ def emotion_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(e, callback_data=f"emotion_{e}")
         for e in EMOTION_EMOJIS
     ]
-    # دو ردیف ۴تایی
-    rows = [buttons[:4], buttons[4:]]
+    # دو ردیف ۴تایی + یه ردیف دکمه رد کردن
+    skip_button = InlineKeyboardButton("⏭ رد کردن", callback_data="emotion_skip")
+    rows = [buttons[:4], buttons[4:], [skip_button]]
     return InlineKeyboardMarkup(rows)
 
 
@@ -252,18 +253,21 @@ async def emotion_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    emotion = query.data.replace("emotion_", "")
-    context.user_data["selected_emotion"] = emotion
+    value = query.data.replace("emotion_", "")
+
+    if value == "skip":
+        context.user_data["selected_emotion"] = None
+        preview = "مطمئنی می‌خوای این پیام رو به‌صورت ناشناس بفرستی؟"
+    else:
+        context.user_data["selected_emotion"] = value
+        preview = f"حست: {value}\n\nمطمئنی می‌خوای این پیام رو به‌صورت ناشناس بفرستی؟"
 
     confirm_keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ ارسال کن", callback_data="confirm_send"),
         InlineKeyboardButton("❌ لغو", callback_data="cancel_send"),
     ]])
 
-    await query.message.edit_text(
-        f"حست: {emotion}\n\nمطمئنی می‌خوای این پیام رو به‌صورت ناشناس بفرستی؟",
-        reply_markup=confirm_keyboard
-    )
+    await query.message.edit_text(preview, reply_markup=confirm_keyboard)
 
 
 async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, msg_id: int):
