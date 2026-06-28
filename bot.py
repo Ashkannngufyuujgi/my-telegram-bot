@@ -29,7 +29,7 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"user_map": {}, "next_id": 1000, "blocked": [], "msg_count": {}, "msg_dates": {}}
+    return {"user_map": {}, "next_id": 1000, "blocked": [], "msg_count": {}, "msg_dates": {}, "msg_total": {}}
 
 def save_data():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -39,6 +39,7 @@ data = load_data()
 data["user_map"] = {str(k): v for k, v in data["user_map"].items()}
 data.setdefault("msg_count", {})
 data.setdefault("msg_dates", {})
+data.setdefault("msg_total", {})  # NEW: تعداد کل پیام‌های ارسالی برای گیمیفیکیشن
 
 
 def get_or_create_code(uid: int) -> int:
@@ -69,6 +70,8 @@ def increment_message_count(uid: int):
         data["msg_dates"][uid] = today
         data["msg_count"][uid] = 0
     data["msg_count"][uid] = data["msg_count"].get(uid, 0) + 1
+    # NEW: افزایش تعداد کل پیام‌ها برای گیمیفیکیشن
+    data["msg_total"][uid] = data["msg_total"].get(uid, 0) + 1
     save_data()
 
 
@@ -78,6 +81,43 @@ def log_message_to_file(uid: int, code: int, content: str):
             f.write(f"[{date.today()}] uid={uid} code={code} | {content}\n")
     except Exception:
         logging.exception("خطا در ثبت لاگ پیام")
+
+
+# ---------- NEW: گیمیفیکیشن - محاسبه رتبه بر اساس کل پیام‌ها ----------
+RANKS = [
+    (0,   "🌱 تازه‌وارد"),
+    (5,   "💬 فعال"),
+    (20,  "⭐ ستاره"),
+    (50,  "🏆 افسانه‌ای"),
+]
+
+def get_rank(uid: int) -> str:
+    total = data["msg_total"].get(str(uid), 0)
+    rank = RANKS[0][1]
+    for threshold, title in RANKS:
+        if total >= threshold:
+            rank = title
+    return rank
+
+def get_next_rank_info(uid: int) -> str:
+    total = data["msg_total"].get(str(uid), 0)
+    for threshold, title in RANKS:
+        if total < threshold:
+            return f"{threshold - total} پیام تا رتبه {title}"
+    return "بالاترین رتبه رو داری! 🎉"
+
+
+# ---------- NEW: برچسب احساسی - ایموجی‌های قابل انتخاب ----------
+EMOTION_EMOJIS = ["😊", "😢", "😡", "😍", "😂", "🤔", "😱", "🙏"]
+
+def emotion_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(e, callback_data=f"emotion_{e}")
+        for e in EMOTION_EMOJIS
+    ]
+    # دو ردیف ۴تایی
+    rows = [buttons[:4], buttons[4:]]
+    return InlineKeyboardMarkup(rows)
 
 
 # ---------- سرور ساده برای زنده نگه‌داشتن سرویس روی Render ----------
@@ -110,8 +150,9 @@ HELP_TEXT = (
     "📋 راهنمای استفاده از ربات:\n\n"
     "• هر پیامی (متن، عکس، ویس، ویدیو، استیکر یا فایل) بفرستی، کاملاً ناشناس برای ادمین ارسال می‌شه.\n"
     "• هیچ‌وقت آیدی یا اسمت برای ادمین نمایش داده نمی‌شه، فقط یه کد عددی.\n"
-    "• قبل از ارسال نهایی، یه پیام تأیید می‌بینی که می‌تونی لغوش کنی.\n"
-    "• اگه ادمین جواب بده، همینجا برات پیام میاد."
+    "• قبل از ارسال نهایی، یه حس انتخاب می‌کنی، بعد تأیید می‌کنی.\n"
+    "• اگه ادمین جواب بده، همینجا برات پیام میاد.\n"
+    "• با ارسال پیام بیشتر، رتبه‌ات بالاتر می‌ره! 🏆"
 )
 
 
@@ -132,12 +173,22 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def mystats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.effective_user.id)
-    code = get_or_create_code(update.effective_user.id)
+    uid = update.effective_user.id
+    uid_str = str(uid)
+    code = get_or_create_code(uid)
     today = str(date.today())
-    sent_today = data["msg_count"].get(uid, 0) if data["msg_dates"].get(uid) == today else 0
+    sent_today = data["msg_count"].get(uid_str, 0) if data["msg_dates"].get(uid_str) == today else 0
+    # NEW: اطلاعات گیمیفیکیشن
+    total_sent = data["msg_total"].get(uid_str, 0)
+    rank = get_rank(uid)
+    next_rank = get_next_rank_info(uid)
     await update.message.reply_text(
-        f"📊 آمار شما:\nکد شما: {code}\nپیام‌های امروز: {sent_today}",
+        f"📊 آمار شما:\n"
+        f"کد شما: {code}\n"
+        f"پیام‌های امروز: {sent_today}\n"
+        f"کل پیام‌های ارسالی: {total_sent}\n\n"
+        f"🏅 رتبه فعلی: {rank}\n"
+        f"⬆️ {next_rank}",
         reply_markup=MAIN_MENU
     )
 
@@ -163,17 +214,15 @@ async def handle_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔️ شما توسط ادمین مسدود شده‌اید.", reply_markup=MAIN_MENU)
         return
 
-    # پیام رو موقت ذخیره می‌کنیم تا بعد از تأیید بفرستیم
+    # پیام رو موقت ذخیره می‌کنیم
     context.user_data["pending_message"] = update.message.message_id
+    # NEW: ریست ایموجی قبلی
+    context.user_data["selected_emotion"] = None
 
-    confirm_keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ ارسال کن", callback_data="confirm_send"),
-        InlineKeyboardButton("❌ لغو", callback_data="cancel_send"),
-    ]])
-
+    # NEW: اول انتخاب احساس
     await update.message.reply_text(
-        "مطمئنی می‌خوای این پیام رو به‌صورت ناشناس بفرستی؟",
-        reply_markup=confirm_keyboard
+        "یه حس برای پیامت انتخاب کن 👇",
+        reply_markup=emotion_keyboard()
     )
 
 
@@ -183,6 +232,7 @@ async def confirm_send_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if query.data == "cancel_send":
         context.user_data["pending_message"] = None
+        context.user_data["selected_emotion"] = None
         await query.message.edit_text("❌ پیام لغو شد.")
         return
 
@@ -193,7 +243,27 @@ async def confirm_send_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await deliver_to_admin(update, context, msg_id)
     context.user_data["pending_message"] = None
+    context.user_data["selected_emotion"] = None
     await query.message.edit_text("✅ پیام شما با موفقیت ارسال شد.")
+
+
+# NEW: هندلر انتخاب ایموجی احساسی
+async def emotion_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    emotion = query.data.replace("emotion_", "")
+    context.user_data["selected_emotion"] = emotion
+
+    confirm_keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ ارسال کن", callback_data="confirm_send"),
+        InlineKeyboardButton("❌ لغو", callback_data="cancel_send"),
+    ]])
+
+    await query.message.edit_text(
+        f"حست: {emotion}\n\nمطمئنی می‌خوای این پیام رو به‌صورت ناشناس بفرستی؟",
+        reply_markup=confirm_keyboard
+    )
 
 
 async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, msg_id: int):
@@ -202,13 +272,16 @@ async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     chat_id = query.message.chat_id
     code = get_or_create_code(uid)
 
-    caption_prefix = f"📩 پیام جدید\nکد کاربر: {code}\n\n"
+    # NEW: ایموجی احساسی رو اضافه می‌کنیم
+    emotion = context.user_data.get("selected_emotion", "")
+    emotion_text = f"حس کاربر: {emotion}\n" if emotion else ""
+
+    caption_prefix = f"📩 پیام جدید\nکد کاربر: {code}\n{emotion_text}\n"
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton("✏️ پاسخ", callback_data=f"reply_{code}")]]
     )
 
     try:
-        # ارسال مجدد پیام اصلی به ادمین با کپی کردن محتوا (بدون فاش شدن هویت فرستنده)
         await context.bot.copy_message(
             chat_id=ADMIN_ID,
             from_chat_id=chat_id,
@@ -355,13 +428,13 @@ async def media_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     context.user_data["pending_message"] = update.message.message_id
-    confirm_keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ ارسال کن", callback_data="confirm_send"),
-        InlineKeyboardButton("❌ لغو", callback_data="cancel_send"),
-    ]])
+    # NEW: ریست ایموجی قبلی
+    context.user_data["selected_emotion"] = None
+
+    # NEW: اول انتخاب احساس
     await update.message.reply_text(
-        "مطمئنی می‌خوای این پیام رو به‌صورت ناشناس بفرستی؟",
-        reply_markup=confirm_keyboard
+        "یه حس برای پیامت انتخاب کن 👇",
+        reply_markup=emotion_keyboard()
     )
 
 
@@ -380,6 +453,8 @@ def main():
 
     app.add_handler(CallbackQueryHandler(reply_button_handler, pattern=r"^reply_\d+$"))
     app.add_handler(CallbackQueryHandler(confirm_send_handler, pattern=r"^(confirm_send|cancel_send)$"))
+    # NEW: هندلر انتخاب ایموجی
+    app.add_handler(CallbackQueryHandler(emotion_handler, pattern=r"^emotion_.+$"))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
     app.add_handler(MessageHandler(
