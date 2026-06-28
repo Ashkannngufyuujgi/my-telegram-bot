@@ -294,9 +294,15 @@ async def price_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         text = await fetch_prices()
         await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_MENU)
-    except Exception:
+    except Exception as e:
+        import traceback
+        err_detail = traceback.format_exc()
         logging.exception("خطا در price_cmd")
-        await update.message.reply_text("⚠️ خطا در دریافت قیمت‌ها. لطفاً بعداً دوباره امتحان کن.", reply_markup=MAIN_MENU)
+        await update.message.reply_text(
+            f"⚠️ خطای دقیق:\n<code>{str(e)[:300]}</code>",
+            parse_mode="HTML",
+            reply_markup=MAIN_MENU
+        )
     finally:
         try:
             await waiting_msg.delete()
