@@ -255,20 +255,20 @@ async def fetch_prices() -> str:
         gold18 = irr.get("gold18", 0)
         mesghal = irr.get("mesghal", 0)
 
-        lines.append("💵 *ارز و طلا* (تومان | دلار)\n")
-        lines.append(f"🇺🇸 دلار آمریکا: `{fmt_toman(usd_buy)}` تومان")
+        lines.append("<b>💵 ارز و طلا</b> (تومان | دلار)\n")
+        lines.append(f"🇺🇸 دلار آمریکا: <code>{fmt_toman(usd_buy)}</code> تومان")
         if gold18:
-            lines.append(f"🥇 طلا ۱۸ عیار (هر گرم): `{fmt_toman(gold18)}` تومان | `{fmt_usd(gold18 / usd_buy)}`")
+            lines.append(f"🥇 طلا ۱۸ عیار (هر گرم): <code>{fmt_toman(gold18)}</code> تومان | <code>{fmt_usd(gold18 / usd_buy)}</code>")
         if mesghal:
-            lines.append(f"🪙 مثقال طلا: `{fmt_toman(mesghal)}` تومان | `{fmt_usd(mesghal / usd_buy)}`")
+            lines.append(f"🪙 مثقال طلا: <code>{fmt_toman(mesghal)}</code> تومان | <code>{fmt_usd(mesghal / usd_buy)}</code>")
     else:
-        lines.append("💵 *ارز و طلا*\n⚠️ در حال حاضر قیمت دریافت نشد. بعداً امتحان کن.")
+        lines.append("<b>💵 ارز و طلا</b>\n⚠️ در حال حاضر قیمت دریافت نشد. بعداً امتحان کن.")
 
     lines.append("")
 
     # بخش ارز دیجیتال
     if isinstance(crypto, list) and len(crypto) > 0:
-        lines.append("🪙 *۱۰ ارز دیجیتال برتر* (دلار | تومان)\n")
+        lines.append("<b>🪙 ۱۰ ارز دیجیتال برتر</b> (دلار | تومان)\n")
         for coin in crypto:
             cid = coin["id"]
             symbol = coin["symbol"]
@@ -277,12 +277,12 @@ async def fetch_prices() -> str:
             change_24h = coin["change24h"]
             arrow = "📈" if change_24h >= 0 else "📉"
             emoji = COIN_EMOJI.get(cid, "🔹")
-            toman_str = f" | `{fmt_toman(int(price_usd * usd_buy))}` تومان" if usd_buy and price_usd * usd_buy > 0 else ""
+            toman_str = f" | <code>{fmt_toman(int(price_usd * usd_buy))}</code> تومان" if usd_buy and price_usd * usd_buy > 0 else ""
             lines.append(
-                f"{emoji} {name} ({symbol}): `{fmt_usd(price_usd)}`{toman_str} {arrow} {change_24h:+.1f}%"
+                f"{emoji} {name} ({symbol}): <code>{fmt_usd(price_usd)}</code>{toman_str} {arrow} {change_24h:+.1f}%"
             )
     else:
-        lines.append("🪙 *ارز دیجیتال*\n⚠️ در حال حاضر قیمت دریافت نشد. بعداً امتحان کن.")
+        lines.append("<b>🪙 ارز دیجیتال</b>\n⚠️ در حال حاضر قیمت دریافت نشد. بعداً امتحان کن.")
 
     lines.append(f"\n🕐 آخرین بروزرسانی: {date.today()}")
     return "\n".join(lines)
@@ -293,7 +293,7 @@ async def price_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     waiting_msg = await update.message.reply_text("⏳ در حال دریافت قیمت‌ها...")
     try:
         text = await fetch_prices()
-        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_MENU)
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=MAIN_MENU)
     except Exception as e:
         import traceback
         err_detail = traceback.format_exc()
