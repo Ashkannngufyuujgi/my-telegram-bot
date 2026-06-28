@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import threading
+import random
 from datetime import date
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import (
@@ -20,7 +21,7 @@ logging.basicConfig(
 
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")  # مثلاً @mychannel
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")  # مثلاً @mindarchive
 
 DATA_FILE = "data.json"
 
@@ -30,7 +31,10 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"user_map": {}, "next_id": 1000, "blocked": [], "msg_count": {}, "msg_dates": {}, "msg_total": {}, "challenge_done": {}, "challenge_counts": {}, "feelings_jar": {}}
+    return {
+        "user_map": {}, "next_id": 1000, "blocked": [],
+        "msg_count": {}, "msg_dates": {}, "msg_total": {}
+    }
 
 def save_data():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -41,9 +45,6 @@ data["user_map"] = {str(k): v for k, v in data["user_map"].items()}
 data.setdefault("msg_count", {})
 data.setdefault("msg_dates", {})
 data.setdefault("msg_total", {})
-data.setdefault("challenge_done", {})
-data.setdefault("challenge_counts", {})
-data.setdefault("feelings_jar", {})
 
 
 def get_or_create_code(uid: int) -> int:
@@ -54,17 +55,14 @@ def get_or_create_code(uid: int) -> int:
         save_data()
     return data["user_map"][uid]
 
-
 def find_uid_by_code(code: int):
     for uid, c in data["user_map"].items():
         if c == code:
             return int(uid)
     return None
 
-
 def is_blocked(uid: int) -> bool:
     return uid in data["blocked"]
-
 
 def increment_message_count(uid: int):
     uid = str(uid)
@@ -75,14 +73,6 @@ def increment_message_count(uid: int):
     data["msg_count"][uid] = data["msg_count"].get(uid, 0) + 1
     data["msg_total"][uid] = data["msg_total"].get(uid, 0) + 1
     save_data()
-
-
-def log_message_to_file(uid: int, code: int, content: str):
-    try:
-        with open("messages_log.txt", "a", encoding="utf-8") as f:
-            f.write(f"[{date.today()}] uid={uid} code={code} | {content}\n")
-    except Exception:
-        logging.exception("خطا در ثبت لاگ پیام")
 
 
 # ---------- عضویت اجباری ----------
@@ -103,13 +93,12 @@ def join_keyboard() -> InlineKeyboardMarkup:
     ])
 
 async def check_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """اگه عضو نبود پیام نشون بده و False برگردونه"""
     uid = update.effective_user.id
     if uid == ADMIN_ID:
         return True
     if not await is_member(context.bot, uid):
         await update.message.reply_text(
-            "🔒 برای استفاده از ربات باید اول عضو کانال ما بشی 👇\n\n"
+            "🔒 برای ورود به آرشیو ذهن باید اول عضو کانال بشی 👇\n\n"
             "بعد از عضویت دکمه «✅ عضو شدم» رو بزن.",
             reply_markup=join_keyboard()
         )
@@ -121,421 +110,152 @@ async def check_join_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     uid = query.from_user.id
     if await is_member(context.bot, uid):
         await query.message.edit_text(
-            "✅ عضویتت تأیید شد! خوش اومدی 🎉\n\nحالا می‌تونی پیام بفرستی 👇"
+            "✅ عضویتت تأیید شد.\n\nبه آرشیو ذهن خوش اومدی 🖤"
         )
         get_or_create_code(uid)
-        await context.bot.send_message(
-            uid,
-            "هر پیامی بفرستی، به‌صورت کاملاً ناشناس برای ادمین ارسال می‌شه 🔒",
+        await context.bot.send_message(uid,
+            "𝐌𝐢𝐧𝐝 𝐀𝐫𝐜𝐡𝐢𝐯𝐞⟆⸙\n\nبه آرشیو ذهن خوش اومدی 🖤\nاینجا یه جای آرومه برای فکر کردن، حس کردن، و نوشتن...",
             reply_markup=MAIN_MENU
         )
     else:
         await query.answer("❌ هنوز عضو کانال نشدی!", show_alert=True)
 
 
-# ---------- پیام‌های تأیید ارسال ----------
+# ---------- محتوا ----------
+
+MEDITATION_TEXTS = [
+    "🧘‍♂️ چشماتو ببند...\n\nنفس عمیق بکش.\nهوا رو حس کن که میاد تو...\nو آروم بیرون میره.\n\nهر فکری که اومد، بذارش بره.\nتو فقط اینجایی. همین لحظه کافیه. 🌙",
+    "🧘‍♀️ یه لحظه وایسا...\n\nچقدر وقته که به جای حس کردن، فقط فکر می‌کنی؟\n\nامشب فقط باش. نه برنامه، نه نگرانی.\nفقط تو و این لحظه‌ی ساکت. 🌿",
+    "🧘‍♂️ آروم بگیر...\n\nذهن خسته نیاز به سکوت داره، نه جواب.\nامشب از خودت نخواه چیزی بفهمی.\nفقط نفس بکش و بذار باشی. 💆‍♂️",
+    "🧘‍♀️ لحظه‌ای که توشی...\n\nنه گذشته‌ای که سنگینیه،\nنه آینده‌ای که نگرانشی.\nفقط همین نفس. همین لحظه. همین تو.\n\nاین کافیه. 🌙",
+    "🧘‍♂️ امشب به خودت اجازه بده...\n\nاجازه بده خسته باشی.\nاجازه بده ندونی.\nاجازه بده فقط باشی، بدون اینکه کاری بکنی.\n\nاستراحت هم یه جور پیشرفته. 🌿",
+    "🧘‍♀️ ذهنت رو خاموش کن...\n\nمثل یه صفحه‌ی سیاه که همه‌چیز روش پاک میشه.\nفکرها میان و میرن.\nتو فقط تماشا کن. قضاوت نکن.\n\nآروم باش. 💆‍♀️",
+    "🧘‍♂️ یه سوال برای امشب...\n\nآخرین باری که واقعاً آروم بودی کِی بود؟\n\nشاید وقتشه دوباره پیداش کنی.\nنه تو گوشی، نه تو سروصدا.\nتو سکوت درونت. 🌙",
+    "🧘‍♀️ نفس اول...\n\nعمیق بکش.\nبذار ریه‌هات پر بشن.\nحالا آروم بده بره.\n\nهر بار که نفس می‌کشی، یه بار از نو شروع می‌کنی. 🌿",
+]
+
+PROGRAMMING_FACTS = [
+    "👨🏻‍💻 فکت برنامه‌نویسی:\n\nوقتی یه برنامه‌نویس بهتون میگه «تو شماره یک منی» خر ذوق نشید!\nتو برنامه‌نویسی شمارش از 0 شروع میشه.\nپس شما الویت دومشید 😂",
+    "👨🏻‍💻 فکت برنامه‌نویسی:\n\n۹۰٪ از وقت یه برنامه‌نویس صرف پیدا کردن باگ میشه.\n۹٪ ایجاد باگ‌های جدید.\n۱٪ واقعاً کد نوشتن 🫠",
+    "👨🏻‍💻 فکت برنامه‌نویسی:\n\nبرنامه‌نویسا دو جور خوابن:\n۱. قبل از دیباگ: نمی‌تونن بخوابن\n۲. بعد از دیباگ: نمی‌تونن بیدار بمونن 😂",
+    "👨🏻‍💻 فکت برنامه‌نویسی:\n\nاگه کدت رو به یه دوست توضیح بدی و نصفه راه مشکل رو خودت پیدا کنی،\nبهش میگن Rubber Duck Debugging.\nیعنی بعضی وقتا یه اردک لاستیکی بهتر از Stack Overflow کمک می‌کنه 🦆",
+    "👨🏻‍💻 فکت برنامه‌نویسی:\n\nاولین باگ تاریخ رو سال ۱۹۴۷ گریس هاپر پیدا کرد.\nیه حشره واقعی افتاده بود تو کامپیوتر و خرابش کرده بود.\nاز اون به بعد به خطاهای نرم‌افزاری «Bug» گفتن 🐛",
+    "👨🏻‍💻 فکت برنامه‌نویسی:\n\nبرنامه‌نویسا به جای «نمی‌دونم» میگن:\n«باید بیشتر بررسی کنم» 😂\nاما هر دو یه معنی دارن.",
+    "👨🏻‍💻 فکت برنامه‌نویسی:\n\nمتغیر نام‌گذاری کردن سخت‌ترین کار برنامه‌نوییه.\nیه تحقیق نشون داده ۴۰٪ از وقت کدنویسی صرف انتخاب اسم میشه.\nکه البته اسمش هم اشتباهه 😅",
+    "👨🏻‍💻 فکت برنامه‌نویسی:\n\nدو نوع برنامه‌نویس داریم:\nاونایی که بکاپ می‌گیرن.\nاونایی که هنوز فاجعه‌ای ندیدن و بکاپ نمی‌گیرن 🙂",
+]
+
+QUOTES = [
+    "🖤\n\nقرار بود شکفته بشم،\nشکافته شدم.",
+    "🌙\n\nنه شیر شتر ماست میشه،\nنه چوب کج صاف میشه،\nو نه ذات خراب درست میشه.\nآنکه یکبار از مرامش نیش خوردی را نبخش...\n\n«پوست اندازی چه تغییری دهد در ذات مار.»",
+    "🖤\n\nمن اضطراب اجتماعی ندارم،\nمن نفرت اجتماعی دارم.",
+    "🌿\n\nآدم کسی رو نداشته باشه خیلی بهتره\nتا اینکه داشته باشه\nو منتظر توجه از طرفش باشه.",
+    "🌙\n\nخستگی دیروز هنوز تو تنمه.\nبعضی چیزا یه شب نمیره.",
+    "🖤\n\nبعضی آدما رو باید مثل کتاب‌های قدیمی بذاری رو قفسه.\nاحترامشون رو داری،\nامّا دیگه نمی‌خونیشون.",
+    "🌙\n\nتنهایی وقتی دردناکه\nکه کنار یکی باشی\nو بازم تنها باشی.",
+    "🖤\n\nبعضی وقتا سکوت\nنه از بی‌حرفیه،\nاز پر بودنه.",
+    "🌿\n\nآدم باید یاد بگیره\nبعضی چیزارو نپرسه.\nجواباشون سنگین‌تر از سکوتن.",
+    "🌙\n\nهرکی زود فراموش می‌کنه\nیا خیلی قوی‌ه\nیا خیلی تمرین کرده.",
+]
+
 SEND_CONFIRMATIONS = [
     "🌊 پیامت مثل یه بطری تو دریا فرستاده شد...",
-    "🕊️ کبوترت پر زد و رفت!",
-    "🚀 پیامت با سرعت نور پرتاب شد!",
-    "🌙 رازت تو شب گم شد...",
-    "🎯 تیر از کمون رفت!",
-    "💌 نامه‌ات تو باد رها شد...",
-    "🌿 پیامت مثل برگ روی آب شناور شد...",
-    "🔮 جادو شد و فرستاده شد!",
-    "⚡ مثل برق رفت!",
-    "🌸 گلبرگت پرواز کرد...",
-    "🎭 نقابت محکمه، پیامت رفت!",
-    "🌌 پیامت تو کهکشان گم شد...",
-    "🎪 شو شروع شد، پیامت رفت!",
-    "🦋 پروانه‌ات پر زد!",
-    "🌊 موج برد، تو ساحلی...",
-    "🕯️ شمعت روشنه، رازت رفت...",
-    "🎵 نت آخر نواخته شد!",
-    "🌙 ماه دیدش، بقیه نه...",
+    "🖤 رازت تو تاریکی گم شد...",
+    "🌙 شب نگهش می‌داره...",
     "🌿 باد برد، دریا می‌دونه...",
     "💫 ستاره‌ای شد و رفت...",
-    "🎁 بسته‌بندی شد، راهی شد!",
-    "🔑 در قفل شد، کلید دستته...",
-    "🌺 عطرت پیچید تو هوا...",
-    "🎲 تاس انداختی، رفت!",
-    "🌊 زیر امواج پنهونه...",
-    "🦅 عقاب برد تو آسمون!",
-    "🎯 هدف گرفتی، شلیک کردی!",
-    "🌙 شب نگهش می‌داره...",
-    "🔮 آینه دیدش، فراموش کرد!",
-    "💎 گنجینه‌ای شد تو اعماق...",
-    "🌸 بهار برد، پاییز نمی‌دونه!",
-    "🎭 پرده افتاد، صحنه خالی شد!",
-    "🚂 قطار رفت، ریل خالیه...",
-    "🌌 سیاهچاله بلعیدش!",
-    "🎪 سیرک تموم شد، اثری نموند!",
-    "🌊 اقیانوس قبول کرد...",
-    "🦉 جغد شب می‌دونه، دیگران نه!",
-    "🔥 آتیش گرفت و خاکستر شد!",
-    "🌿 جنگل قبولش کرد...",
-    "⭐ بین میلیون‌ها ستاره گم شد!",
+    "🔮 جادو شد و فرستاده شد!",
+    "🌌 پیامت تو کهکشان گم شد...",
+    "🦋 پروانه‌ات پر زد!",
+    "🕯️ شمعت روشنه، رازت رفت...",
+    "⚡ مثل برق رفت!",
 ]
 
-import random as _random
-def get_send_confirmation() -> str:
-    return _random.choice(SEND_CONFIRMATIONS)
 
-
-# ---------- گیمیفیکیشن ----------
-RANKS = [
-    (0,   "🌱 تازه‌وارد"),
-    (5,   "💬 فعال"),
-    (20,  "⭐ ستاره"),
-    (50,  "🏆 افسانه‌ای"),
-]
-
-def get_rank(uid: int) -> str:
-    total = data["msg_total"].get(str(uid), 0)
-    rank = RANKS[0][1]
-    for threshold, title in RANKS:
-        if total >= threshold:
-            rank = title
-    return rank
-
-def get_next_rank_info(uid: int) -> str:
-    total = data["msg_total"].get(str(uid), 0)
-    for threshold, title in RANKS:
-        if total < threshold:
-            return f"{threshold - total} پیام تا رتبه {title}"
-    return "بالاترین رتبه رو داری! 🎉"
-
-
-# ---------- فال روزانه ----------
-FAL_POOL = [
-    ("🌸", "امروز یه اتفاق کوچیک قلبت رو گرم می‌کنه. چشماتو باز نگه‌دار."),
-    ("🌙", "شب امشب برات رازی داره. افکارت رو بنویس، جواب توشونه."),
-    ("⭐", "یه نفر بهت فکر می‌کنه که فکرشو نمی‌کنی. لبخند بزن."),
-    ("🦋", "تغییری در راهه. نترس، بال‌هات قوی‌تر از اونیه که فکر می‌کنی."),
-    ("🌊", "امروز جاری باش. با جریان زندگی بجنگ نه با خودت."),
-    ("🌺", "یه فرصت دم دسته. فقط کافیه دستتو دراز کنی."),
-    ("🔮", "چیزی که گمش کردی، دوباره پیدا می‌شه. صبور باش."),
-    ("🌈", "بعد از این ابرا، رنگ‌های قشنگی در راهه. نزدیکه."),
-    ("💫", "انرژیت امروز خاصه. هر کاری بخوای می‌تونی شروع کنی."),
-    ("🍀", "شانس امروزت بیشتر از دیروزه. یه ریسک کوچیک بکن."),
-    ("🌻", "آفتاب درونتو کسی نمی‌تونه خاموش کنه. درخشش."),
-    ("🕊️", "آروم باش. جواب یه سوال قدیمی امروز بهت می‌رسه."),
-    ("💎", "ارزشت رو دست کم نگیر. کسی هست که چشمش دنبالته."),
-    ("🌿", "امروز به خودت مهربون باش. استراحت هم پیشرفته."),
-    ("🎀", "یه خبر خوب در راهه. صبر کن، دیر نیست."),
-    ("🌝", "امشب آرامش داری. ذهنتو خاموش کن و فقط نفس بکش."),
-    ("🍓", "شیرینی‌ای در راهه که انتظارشو نداری. آماده باش."),
-    ("🪷", "دلت یه چیزی می‌خواد که ازش فرار می‌کنی. وقتشه."),
-    ("✨", "اتفاق‌های خوب به آدم‌های صبور می‌رسن. تو صبوری."),
-    ("🌓", "نیمه‌ی تاریک روزت زود تموم می‌شه. نور داره میاد."),
-]
-
-def get_daily_fal(uid: int) -> tuple:
-    today = str(date.today())
-    seed = hash(f"{uid}_{today}") % len(FAL_POOL)
-    return FAL_POOL[seed]
-
-
-# ---------- چالش روزانه ----------
-CHALLENGE_POOL = [
-    ("🌸", "امروز به یه نفر که مدتیه باهاش حرف نزدی پیام بده."),
-    ("☀️", "صبح از پنجره به آسمون نگاه کن و یه چیز قشنگ توش پیدا کن."),
-    ("📖", "یه صفحه از یه کتاب بخون، حتی اگه حوصله نداشتی."),
-    ("🎵", "یه آهنگ که دوست داری با صدای بلند گوش بده."),
-    ("💌", "یه چیز مثبت درباره خودت روی کاغذ بنویس."),
-    ("🌿", "۱۰ دقیقه از گوشی دور باش و فقط نفس بکش."),
-    ("🍵", "یه چیز گرم بنوش و آروم بشین، بدون گوشی."),
-    ("🌙", "امشب قبل از خواب ۳ تا چیزی که امروز ازشون ممنونی بنویس."),
-    ("💃", "یه موزیک شاد بذار و ۲ دقیقه برقص، حتی اگه تنها باشی."),
-    ("🎨", "یه چیزی بکش، حتی اگه نقاشی بلد نیستی. هر چیزی."),
-    ("🌺", "به یه نفر بگو که دوستش داری یا بهش اهمیت می‌دی."),
-    ("🧘", "۵ دقیقه چشماتو ببند و به هیچی فکر نکن."),
-    ("📸", "از یه چیز قشنگ اطرافت عکس بگیر."),
-    ("🍫", "امروز یه چیز کوچیک به خودت هدیه بده."),
-    ("🚶", "۱۰ دقیقه پیاده‌روی کن، حتی توی خونه."),
-    ("⭐", "یه آرزو بکن و باور کن که ممکنه."),
-    ("🦋", "یه عادت بد امروز رو نکن، فقط یه روز."),
-    ("🌊", "یه لیوان آب بنوش و به بدنت مهربون باش."),
-    ("💫", "یه چیزی که مدتیه ازش فرار می‌کنی رو امروز شروع کن."),
-    ("🎀", "یه لباس یا چیزی که خوشحالت می‌کنه بپوش."),
-    ("🌻", "به یه نفر لبخند بزن، حتی غریبه."),
-    ("🔮", "یه چیز جدید امتحان کن، هر چیزی."),
-    ("🍀", "سه تا چیز خوب که امروز داری رو بشمار."),
-    ("🕊️", "یه نفر رو ببخش، حتی توی ذهنت."),
-    ("🌈", "یه رنگ شاد بپوش یا دورت بذار."),
-    ("💎", "به خودت نگاه کن توی آینه و یه چیز قشنگ ببین."),
-    ("🌝", "زودتر از همیشه بخواب امشب."),
-    ("🍓", "یه میوه یا چیز سالم بخور با حوصله."),
-    ("🪷", "یه موزیک آروم گوش بده و فقط حس کن."),
-    ("✨", "امروز یه نفر رو تحسین کن و بهش بگو."),
-]
-
-def get_daily_challenge(uid: int) -> tuple:
-    today = str(date.today())
-    seed = hash(f"ch_{uid}_{today}") % len(CHALLENGE_POOL)
-    return CHALLENGE_POOL[seed]
-
-def has_done_challenge_today(uid: int) -> bool:
-    return data["challenge_done"].get(str(uid)) == str(date.today())
-
-def mark_challenge_done(uid: int):
-    uid_str = str(uid)
-    data["challenge_done"][uid_str] = str(date.today())
-    data["challenge_counts"][uid_str] = data["challenge_counts"].get(uid_str, 0) + 1
-    save_data()
-
-def get_challenge_count(uid: int) -> int:
-    return data["challenge_counts"].get(str(uid), 0)
-
-
-# ---------- تست شخصیت ----------
-PERSONALITY_QUESTIONS = [
-    {
-        "q": "وقتی ناراحتی چیکار می‌کنی؟",
-        "opts": [("تنها می‌شم و فکر می‌کنم 🌙", "i"), ("با یکی حرف می‌زنم 🌸", "e"),
-                 ("گوش می‌دم به موزیک 🎵", "a"), ("سرم رو شلوغ می‌کنم 🔥", "f")]
-    },
-    {
-        "q": "محیط ایده‌آلت کدومه؟",
-        "opts": [("طبیعت و سکوت 🌿", "n"), ("کافه شلوغ ☕", "e"),
-                 ("خونه و راحتی 🛋️", "i"), ("هر جایی که دوستام باشن 🌺", "s")]
-    },
-    {
-        "q": "بیشتر به چی اهمیت می‌دی؟",
-        "opts": [("احساسات ❤️", "f"), ("منطق 🧩", "t"),
-                 ("خلاقیت 🎨", "a"), ("نظم و برنامه 📋", "j")]
-    },
-    {
-        "q": "وقت آزاد داری چیکار می‌کنی؟",
-        "opts": [("کتاب یا فیلم 📚", "i"), ("بیرون می‌رم با دوستام 🌸", "e"),
-                 ("چیزی خلق می‌کنم 🎨", "a"), ("استراحت می‌کنم 🌙", "n")]
-    },
-    {
-        "q": "دوست داری چطور شناخته بشی؟",
-        "opts": [("مرموز و جذاب 🌙", "m"), ("مهربون و گرم ❤️", "f"),
-                 ("باهوش و خلاق ✨", "a"), ("شاد و پرانرژی 🌟", "e")]
-    },
-]
-
-PERSONALITY_RESULTS = {
-    "i": ("🌙 روح شبانه", "عمیقی، رازآلودی و دنیای درونت خیلی غنیه. هر چیزی رو حس می‌کنی، فقط نشونش نمی‌دی.", "🐺 گرگ"),
-    "e": ("🌸 روح اجتماعی", "انرژیت مسری‌ه! هر جا می‌ری گرما می‌بری. آدم‌ها دورت جمع می‌شن بدون اینکه بدونن چرا.", "🦋 پروانه"),
-    "a": ("🎨 روح هنری", "دنیا رو متفاوت می‌بینی. خلاقیتت یه هدیه‌ست که خیلی‌ها ندارن.", "🦚 طاووس"),
-    "f": ("❤️ روح احساساتی", "قلبت بزرگه و عمیق دوست می‌داری. این یه قدرته، نه ضعف.", "🌺 گل سرخ"),
-    "n": ("🌿 روح آزاد", "به آزادی و آرامش نیاز داری. طبیعت روحته و کمتر کسی تو رو درک می‌کنه.", "🦌 آهو"),
-    "m": ("🌑 روح مرموز", "لایه‌های زیادی داری که کمتر کسی بهشون می‌رسه. این جذابیتته.", "🐈‍⬛ گربه سیاه"),
-    "s": ("☀️ روح شاد", "انرژی مثبتت همه چیز رو روشن می‌کنه. دنیا با تو رنگی‌تره.", "🌻 آفتابگردان"),
-    "t": ("🧩 روح تحلیلگر", "ذهنت همیشه کار می‌کنه. عمیق فکر می‌کنی و کمتر کسی به پات می‌رسه.", "🦉 جغد"),
-    "j": ("📋 روح منظم", "قابل اعتمادی و پایه‌ای. هر جمعی به یه نفر مثل تو نیاز داره.", "🐝 زنبور"),
-}
-
-def get_personality_result(answers: list) -> tuple:
-    from collections import Counter
-    count = Counter(answers)
-    top = count.most_common(1)[0][0]
-    return PERSONALITY_RESULTS.get(top, PERSONALITY_RESULTS["f"])
-
-def personality_keyboard(q_index: int) -> InlineKeyboardMarkup:
-    q = PERSONALITY_QUESTIONS[q_index]
-    rows = [[InlineKeyboardButton(opt, callback_data=f"pq_{q_index}_{val}")]
-            for opt, val in q["opts"]]
-    return InlineKeyboardMarkup(rows)
-
-
-# ---------- شیشه احساسات ----------
-FEELING_EMOJIS = ["😊", "😢", "😡", "😍", "😰", "😴", "🥳", "🫠", "💪", "🥺"]
-
-FEELING_LABELS = {
-    "😊": "شاد", "😢": "غمگین", "😡": "عصبانی", "😍": "عاشق",
-    "😰": "نگران", "😴": "خسته", "🥳": "هیجان‌زده", "🫠": "بی‌حال",
-    "💪": "قوی", "🥺": "دلتنگ"
-}
-
-def feelings_jar_keyboard() -> InlineKeyboardMarkup:
-    buttons = [InlineKeyboardButton(e, callback_data=f"jar_{e}") for e in FEELING_EMOJIS]
-    rows = [buttons[:5], buttons[5:]]
-    return InlineKeyboardMarkup(rows)
-
-def add_feeling(uid: int, emoji: str):
-    uid_str = str(uid)
-    if uid_str not in data["feelings_jar"]:
-        data["feelings_jar"][uid_str] = []
-    data["feelings_jar"][uid_str].append({"date": str(date.today()), "emoji": emoji})
-    data["feelings_jar"][uid_str] = data["feelings_jar"][uid_str][-30:]
-    save_data()
-
-def build_jar_summary(uid: int) -> str:
-    uid_str = str(uid)
-    entries = data["feelings_jar"].get(uid_str, [])
-    if not entries:
-        return "شیشه‌ات خالیه! هنوز هیچ احساسی ثبت نکردی. 🫙"
-
-    from collections import Counter
-    counts = Counter(e["emoji"] for e in entries)
-    total = len(entries)
-    top_emoji, top_count = counts.most_common(1)[0]
-    top_label = FEELING_LABELS.get(top_emoji, "")
-
-    lines = [f"🫙 شیشه احساسات تو ({total} روز ثبت‌شده):\n"]
-    for emoji, count in counts.most_common():
-        label = FEELING_LABELS.get(emoji, "")
-        bar = "█" * count
-        lines.append(f"{emoji} {label}: {bar} ({count})")
-
-    lines.append(f"\n💬 بیشتر از همه {top_emoji} {top_label} بودی.")
-    return "\n".join(lines)
-
-def build_jar_summary_by_code(code: int) -> str:
-    uid = find_uid_by_code(code)
-    if not uid:
-        return "کاربر پیدا نشد."
-    return build_jar_summary(uid)
-
-
-# ---------- برچسب احساسی ----------
-EMOTION_EMOJIS = ["😊", "😢", "😡", "😍", "😂", "🤔", "😱", "🙏"]
-
-def emotion_keyboard() -> InlineKeyboardMarkup:
-    buttons = [
-        InlineKeyboardButton(e, callback_data=f"emotion_{e}")
-        for e in EMOTION_EMOJIS
-    ]
-    skip_button = InlineKeyboardButton("⏭ رد کردن", callback_data="emotion_skip")
-    rows = [buttons[:4], buttons[4:], [skip_button]]
-    return InlineKeyboardMarkup(rows)
-
-
-# ---------- HTTP server برای Render ----------
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is running")
-
-    def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
-
-    def log_message(self, format, *args):
-        pass
-
-def run_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
-    server.serve_forever()
-
-
-# ---------- منوی پایین صفحه ----------
+# ---------- منوی اصلی ----------
 MAIN_MENU = ReplyKeyboardMarkup(
     [
-        ["📝 پیام جدید", "ℹ️ راهنما"],
-        ["📊 آمار من", "🔮 فال امروز"],
-        ["🧠 تست شخصیت", "🎯 چالش امروز"],
-        ["🫙 شیشه احساسات"],
+        ["🧘‍♂️ مدیتیشن", "👨🏻‍💻 فکت برنامه‌نویسی"],
+        ["🖤 جملات", "✉️ پیام ناشناس"],
     ],
     resize_keyboard=True
 )
 
-HELP_TEXT = (
-    "📋 راهنمای استفاده از ربات:\n\n"
-    "• هر پیامی (متن، عکس، ویس، ویدیو، استیکر یا فایل) بفرستی، کاملاً ناشناس برای ادمین ارسال می‌شه.\n"
-    "• هیچ‌وقت آیدی یا اسمت برای ادمین نمایش داده نمی‌شه، فقط یه کد عددی.\n"
-    "• قبل از ارسال نهایی، یه حس انتخاب می‌کنی، بعد تأیید می‌کنی.\n"
-    "• اگه ادمین جواب بده، همینجا برات پیام میاد.\n"
-    "• با ارسال پیام بیشتر، رتبه‌ات بالاتر می‌ره! 🏆\n"
+WELCOME_TEXT = (
+    "𝐌𝐢𝐧𝐝 𝐀𝐫𝐜𝐡𝐢𝐯𝐞⟆⸙\n\n"
+    "به آرشیو ذهن خوش اومدی 🖤\n\n"
+    "اینجا یه جای آرومه\nبرای فکر کردن، حس کردن، و نوشتن...\n\n"
+    "از منو پایین شروع کن 👇"
 )
 
 
-# ---------- دستورات کاربر ----------
+# ---------- دستورات اصلی ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-
-    # چک عضویت در استارت
     if uid != ADMIN_ID and not await is_member(context.bot, uid):
         await update.message.reply_text(
-            "👋 سلام!\n\n"
-            "🔒 برای استفاده از ربات باید اول عضو کانال ما بشی 👇\n\n"
+            "𝐌𝐢𝐧𝐝 𝐀𝐫𝐜𝐡𝐢𝐯𝐞⟆⸙\n\n"
+            "🔒 برای ورود به آرشیو ذهن باید اول عضو کانال بشی 👇\n\n"
             "بعد از عضویت دکمه «✅ عضو شدم» رو بزن.",
             reply_markup=join_keyboard()
         )
         return
-
     get_or_create_code(uid)
-    await update.message.reply_text(
-        "🎉 به ربات پیام ناشناس خوش اومدی!\n\n"
-        "🔒 کاملاً ناشناس: هیچ‌وقت آیدی یا اسمت برای ادمین نمایش داده نمی‌شه.\n\n"
-        "هر پیامی بفرستی، به‌صورت ناشناس برای ادمین ارسال می‌شه.",
-        reply_markup=MAIN_MENU
-    )
+    await update.message.reply_text(WELCOME_TEXT, reply_markup=MAIN_MENU)
 
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(HELP_TEXT, reply_markup=MAIN_MENU)
-
-
-async def mystats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    uid_str = str(uid)
-    code = get_or_create_code(uid)
-    today = str(date.today())
-    sent_today = data["msg_count"].get(uid_str, 0) if data["msg_dates"].get(uid_str) == today else 0
-    total_sent = data["msg_total"].get(uid_str, 0)
-    rank = get_rank(uid)
-    next_rank = get_next_rank_info(uid)
-    await update.message.reply_text(
-        f"📊 آمار شما:\n"
-        f"کد شما: {code}\n"
-        f"پیام‌های امروز: {sent_today}\n"
-        f"کل پیام‌های ارسالی: {total_sent}\n\n"
-        f"🏅 رتبه فعلی: {rank}\n"
-        f"⬆️ {next_rank}\n\n"
-        f"🎯 چالش‌های انجام‌شده: {get_challenge_count(uid)} تا",
-        reply_markup=MAIN_MENU
-    )
-
-
-# ---------- جریان ارسال پیام با تأیید ----------
 async def handle_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     text = update.message.text or ""
 
-    if text == "ℹ️ راهنما":
-        await help_cmd(update, context)
-        return
-    if text == "📊 آمار من":
-        await mystats_cmd(update, context)
-        return
-    if text == "📝 پیام جدید":
-        await update.message.reply_text("بفرما، پیامت رو بنویس یا بفرست 👇", reply_markup=MAIN_MENU)
-        return
-    if text == "🔮 فال امروز":
-        await fal_cmd(update, context)
-        return
-    if text == "🧠 تست شخصیت":
-        await personality_start(update, context)
-        return
-    if text == "🎯 چالش امروز":
-        await challenge_cmd(update, context)
-        return
-    if text == "🫙 شیشه احساسات":
-        await feelings_jar_cmd(update, context)
+    # --- منو ---
+    if text == "🧘‍♂️ مدیتیشن":
+        msg = random.choice(MEDITATION_TEXTS)
+        await update.message.reply_text(msg, reply_markup=MAIN_MENU)
         return
 
-    # چک عضویت قبل از ارسال پیام
-    if not await check_membership(update, context):
+    if text == "👨🏻‍💻 فکت برنامه‌نویسی":
+        msg = random.choice(PROGRAMMING_FACTS)
+        await update.message.reply_text(msg, reply_markup=MAIN_MENU)
         return
 
-    if is_blocked(uid):
-        await update.message.reply_text("⛔️ شما توسط ادمین مسدود شده‌اید.", reply_markup=MAIN_MENU)
+    if text == "🖤 جملات":
+        msg = random.choice(QUOTES)
+        await update.message.reply_text(msg, reply_markup=MAIN_MENU)
         return
 
-    context.user_data["pending_message"] = update.message.message_id
-    context.user_data["selected_emotion"] = None
+    if text == "✉️ پیام ناشناس":
+        if not await check_membership(update, context):
+            return
+        if is_blocked(uid):
+            await update.message.reply_text("⛔️ دسترسی شما محدود شده.", reply_markup=MAIN_MENU)
+            return
+        await update.message.reply_text(
+            "✉️ پیام ناشناست رو بنویس 👇\n\n"
+            "هیچ‌کس نمی‌فهمه کی فرستاده 🖤",
+            reply_markup=MAIN_MENU
+        )
+        context.user_data["awaiting_anon_message"] = True
+        return
 
-    await update.message.reply_text(
-        "یه حس برای پیامت انتخاب کن 👇",
-        reply_markup=emotion_keyboard()
-    )
+    # --- پیام ناشناس ---
+    if context.user_data.get("awaiting_anon_message"):
+        if not await check_membership(update, context):
+            return
+        if is_blocked(uid):
+            await update.message.reply_text("⛔️ دسترسی شما محدود شده.", reply_markup=MAIN_MENU)
+            return
+        context.user_data["pending_message"] = update.message.message_id
+        context.user_data["awaiting_anon_message"] = False
+        confirm_keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ ارسال کن", callback_data="confirm_send"),
+            InlineKeyboardButton("❌ لغو", callback_data="cancel_send"),
+        ]])
+        await update.message.reply_text(
+            "مطمئنی می‌خوای این پیام رو ناشناس بفرستی؟",
+            reply_markup=confirm_keyboard
+        )
+        return
 
 
 async def confirm_send_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -544,213 +264,17 @@ async def confirm_send_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if query.data == "cancel_send":
         context.user_data["pending_message"] = None
-        context.user_data["selected_emotion"] = None
         await query.message.edit_text("❌ پیام لغو شد.")
         return
 
     msg_id = context.user_data.get("pending_message")
     if not msg_id:
-        await query.message.edit_text("پیامی برای ارسال پیدا نشد.")
+        await query.message.edit_text("پیامی پیدا نشد.")
         return
 
-    sent_msg = await deliver_to_admin(update, context, msg_id)
+    await deliver_to_admin(update, context, msg_id)
     context.user_data["pending_message"] = None
-    context.user_data["selected_emotion"] = None
-    confirmation = get_send_confirmation()
-    await query.message.edit_text(f"✅ {confirmation}")
-
-
-async def emotion_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    value = query.data.replace("emotion_", "")
-
-    if value == "skip":
-        context.user_data["selected_emotion"] = None
-        preview = "مطمئنی می‌خوای این پیام رو به‌صورت ناشناس بفرستی؟"
-    else:
-        context.user_data["selected_emotion"] = value
-        preview = f"حست: {value}\n\nمطمئنی می‌خوای این پیام رو به‌صورت ناشناس بفرستی؟"
-
-    confirm_keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ ارسال کن", callback_data="confirm_send"),
-        InlineKeyboardButton("❌ لغو", callback_data="cancel_send"),
-    ]])
-
-    await query.message.edit_text(preview, reply_markup=confirm_keyboard)
-
-
-async def fal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    emoji, text = get_daily_fal(uid)
-    await update.message.reply_text(
-        f"{emoji} فال امروز تو:\n\n{text}\n\n✨ فردا برگرد برای فال جدید!",
-        reply_markup=MAIN_MENU
-    )
-
-
-async def personality_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["pq_answers"] = []
-    await update.message.reply_text(
-        "🧠 تست شخصیت شروع شد!\n۵ سوال داریم، صادقانه انتخاب کن 💫\n\n"
-        f"سوال ۱ از ۵:\n{PERSONALITY_QUESTIONS[0]['q']}",
-        reply_markup=personality_keyboard(0)
-    )
-
-
-async def personality_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    _, q_index_str, val = query.data.split("_", 2)
-    q_index = int(q_index_str)
-
-    answers = context.user_data.get("pq_answers", [])
-    answers.append(val)
-    context.user_data["pq_answers"] = answers
-
-    next_q = q_index + 1
-
-    if next_q < len(PERSONALITY_QUESTIONS):
-        await query.message.edit_text(
-            f"سوال {next_q + 1} از {len(PERSONALITY_QUESTIONS)}:\n{PERSONALITY_QUESTIONS[next_q]['q']}",
-            reply_markup=personality_keyboard(next_q)
-        )
-    else:
-        title, desc, animal = get_personality_result(answers)
-        context.user_data["pq_answers"] = []
-        await query.message.edit_text(
-            f"✨ نتیجه تست شخصیت تو:\n\n"
-            f"🏷️ {title}\n"
-            f"🐾 روح حیوانیت: {animal}\n\n"
-            f"💬 {desc}\n\n"
-            f"می‌تونی دوباره امتحان کنی یا پیام ناشناس بفرستی 💌"
-        )
-
-
-async def challenge_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    emoji, text = get_daily_challenge(uid)
-    count = get_challenge_count(uid)
-    done_today = has_done_challenge_today(uid)
-
-    if done_today:
-        await update.message.reply_text(
-            f"✅ چالش امروزت رو انجام دادی! خوووبی 🎉\n\n"
-            f"🎯 کل چالش‌های انجام‌شده: {count}\n\n"
-            f"فردا برگرد برای چالش جدید 💪",
-            reply_markup=MAIN_MENU
-        )
-        return
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ انجامش دادم!", callback_data="challenge_done"),
-        InlineKeyboardButton("🔄 بعداً", callback_data="challenge_later"),
-    ]])
-    await update.message.reply_text(
-        f"{emoji} چالش امروز تو:\n\n{text}\n\n"
-        f"🎯 چالش‌های قبلی: {count} تا\n\n"
-        "وقتی انجامش دادی بگو 👇",
-        reply_markup=keyboard
-    )
-
-
-async def challenge_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    uid = query.from_user.id
-
-    if query.data == "challenge_done":
-        if has_done_challenge_today(uid):
-            await query.message.edit_text("قبلاً ثبت شده بود! ✅")
-            return
-        mark_challenge_done(uid)
-        count = get_challenge_count(uid)
-        await query.message.edit_text(
-            f"🎉 آفرین! چالش امروزت ثبت شد.\n\n"
-            f"🏅 کل چالش‌های انجام‌شده: {count} تا\n\n"
-            f"{'🔥 داری می‌درخشی!' if count >= 10 else '💪 همینطور ادامه بده!'}"
-        )
-    elif query.data == "challenge_later":
-        await query.message.edit_text(
-            "باشه! یادت نره امروز انجامش بدی 😊\n"
-            "هر وقت آماده شدی دوباره بزن روی 🎯 چالش امروز"
-        )
-
-
-async def feelings_jar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    uid_str = str(uid)
-    entries = data["feelings_jar"].get(uid_str, [])
-    today = str(date.today())
-    already_today = any(e["date"] == today for e in entries)
-
-    summary = build_jar_summary(uid)
-
-    if already_today:
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📊 خلاصه احساساتم", callback_data="jar_summary"),
-        ]])
-        await update.message.reply_text(
-            f"{summary}\n\n✅ امروز قبلاً احساست رو ثبت کردی.\nفردا برگرد 🫙",
-            reply_markup=keyboard
-        )
-    else:
-        await update.message.reply_text(
-            f"{summary}\n\n امروز چه حسی داری؟ 👇",
-            reply_markup=feelings_jar_keyboard()
-        )
-
-
-async def feelings_jar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    uid = query.from_user.id
-
-    if query.data == "jar_summary":
-        summary = build_jar_summary(uid)
-        await query.message.edit_text(summary)
-        return
-
-    emoji = query.data.replace("jar_", "")
-    if emoji not in FEELING_EMOJIS:
-        return
-
-    today = str(date.today())
-    uid_str = str(uid)
-    entries = data["feelings_jar"].get(uid_str, [])
-    if any(e["date"] == today for e in entries):
-        await query.message.edit_text("امروز قبلاً ثبت کردی! 🫙 فردا برگرد.")
-        return
-
-    add_feeling(uid, emoji)
-    label = FEELING_LABELS.get(emoji, "")
-    await query.message.edit_text(
-        f"{emoji} احساس «{label}» برای امروز ثبت شد!\n\n"
-        f"هر روز که بیای و احساستو ثبت کنی، شیشه‌ات پر‌تر می‌شه 🫙"
-    )
-
-
-async def jar_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    try:
-        code = int(context.args[0])
-        summary = build_jar_summary_by_code(code)
-        await update.message.reply_text(f"🫙 شیشه احساسات کد {code}:\n\n{summary}")
-    except (IndexError, ValueError):
-        if not data["feelings_jar"]:
-            await update.message.reply_text("هنوز هیچ کسی احساسی ثبت نکرده.")
-            return
-        lines = ["🫙 کاربرایی که احساس ثبت کردن:\n"]
-        for uid_str, entries in data["feelings_jar"].items():
-            if not entries:
-                continue
-            code = data["user_map"].get(uid_str, "؟")
-            lines.append(f"کد {code} — {len(entries)} ثبت")
-        lines.append("\nبرای دیدن جزئیات: /jar کد")
-        await update.message.reply_text("\n".join(lines))
+    await query.message.edit_text(f"✅ {random.choice(SEND_CONFIRMATIONS)}")
 
 
 async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, msg_id: int):
@@ -759,10 +283,6 @@ async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     chat_id = query.message.chat_id
     code = get_or_create_code(uid)
 
-    emotion = context.user_data.get("selected_emotion", "")
-    emotion_text = f"حس کاربر: {emotion}\n" if emotion else ""
-
-    caption_prefix = f"📩 پیام جدید\nکد کاربر: {code}\n{emotion_text}\n"
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✏️ پاسخ", callback_data=f"reply_{code}"),
         InlineKeyboardButton("👁 خوندم", callback_data=f"read_{code}_{uid}"),
@@ -776,13 +296,43 @@ async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         )
         await context.bot.send_message(
             chat_id=ADMIN_ID,
-            text=caption_prefix + "(پیام بالا 👆)",
+            text=f"📩 پیام ناشناس\nکد کاربر: {code}\n(پیام بالا 👆)",
             reply_markup=keyboard
         )
         increment_message_count(uid)
-        log_message_to_file(uid, code, "پیام/مدیا ارسال شد")
     except Exception:
         logging.exception("خطا در ارسال پیام به ادمین")
+
+
+# ---------- هندلر مدیا (پیام ناشناس) ----------
+async def media_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+
+    if not context.user_data.get("awaiting_anon_message"):
+        await update.message.reply_text(
+            "برای ارسال پیام ناشناس از منو «✉️ پیام ناشناس» رو بزن 👇",
+            reply_markup=MAIN_MENU
+        )
+        return
+
+    if not await check_membership(update, context):
+        return
+
+    if is_blocked(uid):
+        await update.message.reply_text("⛔️ دسترسی شما محدود شده.", reply_markup=MAIN_MENU)
+        return
+
+    context.user_data["pending_message"] = update.message.message_id
+    context.user_data["awaiting_anon_message"] = False
+
+    confirm_keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ ارسال کن", callback_data="confirm_send"),
+        InlineKeyboardButton("❌ لغو", callback_data="cancel_send"),
+    ]])
+    await update.message.reply_text(
+        "مطمئنی می‌خوای این پیام رو ناشناس بفرستی؟",
+        reply_markup=confirm_keyboard
+    )
 
 
 # ---------- هندلر خوندم ----------
@@ -791,18 +341,16 @@ async def read_receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer("✅ علامت‌گذاری شد!")
     if query.from_user.id != ADMIN_ID:
         return
-
-    parts = query.data.split("_")  # read_{code}_{uid}
+    parts = query.data.split("_")
     uid = int(parts[2])
-
     try:
-        await context.bot.send_message(uid, "👁 ادمین پیامتو خوند!")
+        await context.bot.send_message(uid, "👁 هادی پیامتو خوند.")
         await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("✏️ پاسخ", callback_data=f"reply_{parts[1]}"),
             InlineKeyboardButton("✅ خونده شد", callback_data="noop"),
         ]]))
     except Exception:
-        logging.exception("خطا در ارسال read receipt")
+        logging.exception("خطا در read receipt")
 
 
 async def noop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -810,27 +358,6 @@ async def noop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------- دستورات ادمین ----------
-async def reply_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    try:
-        parts = update.message.text.split(maxsplit=2)
-        if len(parts) < 3:
-            await update.message.reply_text("فرمت درست: /reply کد پیام")
-            return
-        code = int(parts[1])
-        text = parts[2]
-        uid = find_uid_by_code(code)
-        if uid:
-            await context.bot.send_message(uid, f"📨 پاسخ ادمین:\n{text}")
-            await update.message.reply_text("ارسال شد ✔️")
-        else:
-            await update.message.reply_text("کاربر پیدا نشد")
-    except Exception:
-        logging.exception("خطا در دستور reply")
-        await update.message.reply_text("خطا در دستور")
-
-
 async def reply_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -838,12 +365,10 @@ async def reply_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     code = query.data.split("_")[1]
     context.user_data["awaiting_reply_to"] = int(code)
-    await query.message.reply_text(
-        f"✏️ پاسخ خودت رو برای کد {code} بفرست (فقط متن، به‌عنوان پیام بعدی)."
-    )
+    await query.message.reply_text(f"✏️ پاسخت رو برای کد {code} بفرست.")
 
 
-async def admin_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if update.effective_user.id != ADMIN_ID:
         return False
     code = context.user_data.get("awaiting_reply_to")
@@ -851,12 +376,31 @@ async def admin_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return False
     uid = find_uid_by_code(code)
     if uid:
-        await context.bot.send_message(uid, f"📨 پاسخ ادمین:\n{update.message.text}")
+        await context.bot.send_message(uid, f"📨 پاسخ هادی:\n{update.message.text}")
         await update.message.reply_text("ارسال شد ✔️")
     else:
-        await update.message.reply_text("کاربر پیدا نشد")
+        await update.message.reply_text("کاربر پیدا نشد.")
     context.user_data["awaiting_reply_to"] = None
     return True
+
+
+async def reply_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        parts = update.message.text.split(maxsplit=2)
+        if len(parts) < 3:
+            await update.message.reply_text("فرمت: /reply کد پیام")
+            return
+        code = int(parts[1])
+        uid = find_uid_by_code(code)
+        if uid:
+            await context.bot.send_message(uid, f"📨 پاسخ هادی:\n{parts[2]}")
+            await update.message.reply_text("ارسال شد ✔️")
+        else:
+            await update.message.reply_text("کاربر پیدا نشد.")
+    except Exception:
+        await update.message.reply_text("خطا در دستور.")
 
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -865,9 +409,12 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total = len(data["user_map"])
     blocked = len(data["blocked"])
     today = str(date.today())
-    today_total = sum(data["msg_count"].get(uid, 0) for uid, d in data["msg_dates"].items() if d == today)
+    today_total = sum(
+        data["msg_count"].get(uid, 0)
+        for uid, d in data["msg_dates"].items() if d == today
+    )
     await update.message.reply_text(
-        f"📊 آمار بات:\nکل کاربران: {total}\nمسدودشده‌ها: {blocked}\nپیام‌های امروز: {today_total}"
+        f"📊 آمار:\nکل کاربران: {total}\nمسدود: {blocked}\nپیام‌های امروز: {today_total}"
     )
 
 
@@ -878,14 +425,14 @@ async def block_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         code = int(context.args[0])
         uid = find_uid_by_code(code)
         if not uid:
-            await update.message.reply_text("کاربر پیدا نشد")
+            await update.message.reply_text("کاربر پیدا نشد.")
             return
         if uid not in data["blocked"]:
             data["blocked"].append(uid)
             save_data()
-        await update.message.reply_text(f"کاربر با کد {code} مسدود شد.")
+        await update.message.reply_text(f"کد {code} مسدود شد.")
     except (IndexError, ValueError):
-        await update.message.reply_text("فرمت درست: /block کد")
+        await update.message.reply_text("فرمت: /block کد")
 
 
 async def unblock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -897,11 +444,11 @@ async def unblock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if uid and uid in data["blocked"]:
             data["blocked"].remove(uid)
             save_data()
-            await update.message.reply_text(f"کاربر با کد {code} رفع مسدودیت شد.")
+            await update.message.reply_text(f"کد {code} رفع مسدودیت شد.")
         else:
             await update.message.reply_text("کاربر مسدود نبود یا پیدا نشد.")
     except (IndexError, ValueError):
-        await update.message.reply_text("فرمت درست: /unblock کد")
+        await update.message.reply_text("فرمت: /unblock کد")
 
 
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -909,18 +456,36 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = update.message.text.partition(" ")[2]
     if not text:
-        await update.message.reply_text("فرمت درست: /broadcast متن پیام")
+        await update.message.reply_text("فرمت: /broadcast متن")
         return
     sent, failed = 0, 0
     for uid in data["user_map"]:
         if int(uid) in data["blocked"]:
             continue
         try:
-            await context.bot.send_message(int(uid), f"📢 پیام همگانی:\n{text}")
+            await context.bot.send_message(int(uid), f"📢 {text}")
             sent += 1
         except Exception:
             failed += 1
-    await update.message.reply_text(f"ارسال شد به {sent} نفر. ناموفق: {failed}")
+    await update.message.reply_text(f"ارسال به {sent} نفر. ناموفق: {failed}")
+
+
+# ---------- HTTP server برای Render ----------
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Mind Archive Bot is running")
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+    def log_message(self, format, *args):
+        pass
+
+def run_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    server.serve_forever()
 
 
 # ---------- روتر اصلی ----------
@@ -930,51 +495,23 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_incoming(update, context)
 
 
-async def media_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-
-    # چک عضویت برای مدیا
-    if not await check_membership(update, context):
-        return
-
-    if is_blocked(uid):
-        await update.message.reply_text("⛔️ شما توسط ادمین مسدود شده‌اید.", reply_markup=MAIN_MENU)
-        return
-
-    context.user_data["pending_message"] = update.message.message_id
-    context.user_data["selected_emotion"] = None
-
-    await update.message.reply_text(
-        "یه حس برای پیامت انتخاب کن 👇",
-        reply_markup=emotion_keyboard()
-    )
-
-
 def main():
     threading.Thread(target=run_server, daemon=True).start()
 
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("reply", reply_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("block", block_cmd))
     app.add_handler(CommandHandler("unblock", unblock_cmd))
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
-    app.add_handler(CommandHandler("jar", jar_admin_cmd))
 
-    # هندلر تأیید عضویت
     app.add_handler(CallbackQueryHandler(check_join_handler, pattern=r"^check_join$"))
-
     app.add_handler(CallbackQueryHandler(reply_button_handler, pattern=r"^reply_\d+$"))
     app.add_handler(CallbackQueryHandler(read_receipt_handler, pattern=r"^read_\d+_\d+$"))
     app.add_handler(CallbackQueryHandler(noop_handler, pattern=r"^noop$"))
     app.add_handler(CallbackQueryHandler(confirm_send_handler, pattern=r"^(confirm_send|cancel_send)$"))
-    app.add_handler(CallbackQueryHandler(emotion_handler, pattern=r"^emotion_.+$"))
-    app.add_handler(CallbackQueryHandler(personality_answer_handler, pattern=r"^pq_\d+_.+$"))
-    app.add_handler(CallbackQueryHandler(challenge_callback_handler, pattern=r"^challenge_(done|later)$"))
-    app.add_handler(CallbackQueryHandler(feelings_jar_callback, pattern=r"^jar_.+$"))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
     app.add_handler(MessageHandler(
@@ -982,7 +519,7 @@ def main():
         media_router
     ))
 
-    logging.info("شروع polling...")
+    logging.info("Mind Archive Bot started...")
     app.run_polling()
 
 
