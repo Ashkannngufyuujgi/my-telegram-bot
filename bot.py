@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import threading
+import aiohttp
 from datetime import date
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import (
@@ -39,10 +40,10 @@ data = load_data()
 data["user_map"] = {str(k): v for k, v in data["user_map"].items()}
 data.setdefault("msg_count", {})
 data.setdefault("msg_dates", {})
-data.setdefault("msg_total", {})  # NEW: تعداد کل پیام‌های ارسالی برای گیمیفیکیشن
-data.setdefault("challenge_done", {})   # NEW: uid -> تاریخی که چالش انجام داده
-data.setdefault("challenge_counts", {}) # NEW: uid -> تعداد کل چالش‌های انجام‌شده
-data.setdefault("feelings_jar", {})     # NEW: uid -> [{date, emoji}]
+data.setdefault("msg_total", {})
+data.setdefault("challenge_done", {})
+data.setdefault("challenge_counts", {})
+data.setdefault("feelings_jar", {})
 
 
 def get_or_create_code(uid: int) -> int:
@@ -66,14 +67,12 @@ def is_blocked(uid: int) -> bool:
 
 
 def increment_message_count(uid: int):
-    """فقط برای آمار، بدون هیچ محدودیتی"""
     uid = str(uid)
     today = str(date.today())
     if data["msg_dates"].get(uid) != today:
         data["msg_dates"][uid] = today
         data["msg_count"][uid] = 0
     data["msg_count"][uid] = data["msg_count"].get(uid, 0) + 1
-    # NEW: افزایش تعداد کل پیام‌ها برای گیمیفیکیشن
     data["msg_total"][uid] = data["msg_total"].get(uid, 0) + 1
     save_data()
 
@@ -86,7 +85,7 @@ def log_message_to_file(uid: int, code: int, content: str):
         logging.exception("خطا در ثبت لاگ پیام")
 
 
-# ---------- NEW: گیمیفیکیشن - محاسبه رتبه بر اساس کل پیام‌ها ----------
+# ---------- گیمیفیکیشن ----------
 RANKS = [
     (0,   "🌱 تازه‌وارد"),
     (5,   "💬 فعال"),
@@ -110,7 +109,119 @@ def get_next_rank_info(uid: int) -> str:
     return "بالاترین رتبه رو داری! 🎉"
 
 
-# ---------- NEW: فال روزانه (بر اساس کد کاربر + تاریخ — هر نفر فال خودش رو داره) ----------
+# ---------- قیمت لحظه‌ای ----------
+
+def fmt_toman(value: float) -> str:
+    """فرمت عدد با جداکننده هزار"""
+    return f"{int(value):,}"
+
+def fmt_usd(value: float) -> str:
+    if value >= 1:
+        return f"${value:,.2f}"
+    elif value >= 0.01:
+        return f"${value:.4f}"
+    else:
+        return f"${value:.6f}"
+
+async def fetch_prices() -> str:
+    """دریافت قیمت طلا، دلار و ۱۰ ارز دیجیتال برتر"""
+    lines = []
+
+    # --- دلار و طلا از navasan.ir (رایگان، بدون کلید) ---
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://api.navasan.tech/latest/?api_key=free",
+                timeout=aiohttp.ClientTimeout(total=8)
+            ) as resp:
+                nav = await resp.json()
+
+        usd_buy = float(nav.get("usd", {}).get("value", 0))
+        gold_18 = float(nav.get("geram18", {}).get("value", 0))
+        gold_mesghal = float(nav.get("mesghal", {}).get("value", 0))
+
+        lines.append("💵 *ارز و طلا* (تومان | دلار)\n")
+        if usd_buy:
+            lines.append(f"🇺🇸 دلار آمریکا: `{fmt_toman(usd_buy)}` تومان")
+        if gold_18:
+            usd_val = gold_18 / usd_buy if usd_buy else 0
+            lines.append(f"🥇 طلا ۱۸ عیار (هر گرم): `{fmt_toman(gold_18)}` تومان | `{fmt_usd(usd_val)}`")
+        if gold_mesghal:
+            usd_val = gold_mesghal / usd_buy if usd_buy else 0
+            lines.append(f"🪙 مثقال طلا: `{fmt_toman(gold_mesghal)}` تومان | `{fmt_usd(usd_val)}`")
+
+    except Exception as e:
+        logging.warning(f"خطا در دریافت navasan: {e}")
+        lines.append("⚠️ دریافت قیمت دلار/طلا با خطا مواجه شد.")
+        usd_buy = 0
+
+    lines.append("")
+
+    # --- ۱۰ ارز دیجیتال برتر از CoinGecko (رایگان، بدون کلید) ---
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://api.coingecko.com/api/v3/coins/markets",
+                params={
+                    "vs_currency": "usd",
+                    "order": "market_cap_desc",
+                    "per_page": 10,
+                    "page": 1,
+                    "sparkline": False,
+                    "price_change_percentage": "24h"
+                },
+                headers={"Accept": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                coins = await resp.json()
+
+        lines.append("🪙 *۱۰ ارز دیجیتال برتر* (دلار | تومان)\n")
+
+        COIN_EMOJI = {
+            "bitcoin": "₿", "ethereum": "Ξ", "tether": "💲",
+            "binancecoin": "🔶", "solana": "◎", "xrp": "〽️",
+            "usd-coin": "💵", "dogecoin": "🐶", "cardano": "🔵",
+            "tron": "🔴", "avalanche-2": "🏔️", "shiba-inu": "🐕",
+            "polkadot": "⚪", "chainlink": "🔗", "matic-network": "🟣",
+            "litecoin": "🌕", "bitcoin-cash": "💚", "stellar": "⭐",
+        }
+
+        for coin in coins:
+            cid = coin.get("id", "")
+            symbol = coin.get("symbol", "").upper()
+            name = coin.get("name", "")
+            price_usd = coin.get("current_price", 0) or 0
+            change_24h = coin.get("price_change_percentage_24h", 0) or 0
+            arrow = "📈" if change_24h >= 0 else "📉"
+            emoji = COIN_EMOJI.get(cid, "🔹")
+
+            price_toman = int(price_usd * usd_buy) if usd_buy else None
+
+            toman_str = f" | `{fmt_toman(price_toman)}` تومان" if price_toman else ""
+            lines.append(
+                f"{emoji} {name} ({symbol}): `{fmt_usd(price_usd)}`{toman_str} {arrow} {change_24h:+.1f}%"
+            )
+
+    except Exception as e:
+        logging.warning(f"خطا در دریافت CoinGecko: {e}")
+        lines.append("⚠️ دریافت قیمت ارز دیجیتال با خطا مواجه شد.")
+
+    lines.append(f"\n🕐 آخرین بروزرسانی: {date.today()}")
+    return "\n".join(lines)
+
+
+async def price_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نمایش قیمت لحظه‌ای"""
+    msg = await update.message.reply_text("⏳ در حال دریافت قیمت‌ها...", reply_markup=MAIN_MENU)
+    try:
+        text = await fetch_prices()
+        await msg.edit_text(text, parse_mode="Markdown")
+    except Exception as e:
+        logging.exception("خطا در price_cmd")
+        await msg.edit_text("⚠️ خطا در دریافت قیمت‌ها. لطفاً بعداً دوباره امتحان کن.")
+
+
+# ---------- فال روزانه ----------
 FAL_POOL = [
     ("🌸", "امروز یه اتفاق کوچیک قلبت رو گرم می‌کنه. چشماتو باز نگه‌دار."),
     ("🌙", "شب امشب برات رازی داره. افکارت رو بنویس، جواب توشونه."),
@@ -140,7 +251,7 @@ def get_daily_fal(uid: int) -> tuple:
     return FAL_POOL[seed]
 
 
-# ---------- NEW: چالش روزانه ----------
+# ---------- چالش روزانه ----------
 CHALLENGE_POOL = [
     ("🌸", "امروز به یه نفر که مدتیه باهاش حرف نزدی پیام بده."),
     ("☀️", "صبح از پنجره به آسمون نگاه کن و یه چیز قشنگ توش پیدا کن."),
@@ -192,7 +303,7 @@ def get_challenge_count(uid: int) -> int:
     return data["challenge_counts"].get(str(uid), 0)
 
 
-
+# ---------- تست شخصیت ----------
 PERSONALITY_QUESTIONS = [
     {
         "q": "وقتی ناراحتی چیکار می‌کنی؟",
@@ -246,10 +357,7 @@ def personality_keyboard(q_index: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-    return InlineKeyboardMarkup(rows)
-
-
-# ---------- NEW: شیشه احساسات ----------
+# ---------- شیشه احساسات ----------
 FEELING_EMOJIS = ["😊", "😢", "😡", "😍", "😰", "😴", "🥳", "🫠", "💪", "🥺"]
 
 FEELING_LABELS = {
@@ -268,7 +376,6 @@ def add_feeling(uid: int, emoji: str):
     if uid_str not in data["feelings_jar"]:
         data["feelings_jar"][uid_str] = []
     data["feelings_jar"][uid_str].append({"date": str(date.today()), "emoji": emoji})
-    # فقط ۳۰ روز آخر نگه می‌داریم
     data["feelings_jar"][uid_str] = data["feelings_jar"][uid_str][-30:]
     save_data()
 
@@ -300,7 +407,7 @@ def build_jar_summary_by_code(code: int) -> str:
     return build_jar_summary(uid)
 
 
-# ---------- NEW: برچسب احساسی - ایموجی‌های قابل انتخاب ----------
+# ---------- برچسب احساسی ----------
 EMOTION_EMOJIS = ["😊", "😢", "😡", "😍", "😂", "🤔", "😱", "🙏"]
 
 def emotion_keyboard() -> InlineKeyboardMarkup:
@@ -308,13 +415,12 @@ def emotion_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(e, callback_data=f"emotion_{e}")
         for e in EMOTION_EMOJIS
     ]
-    # دو ردیف ۴تایی + یه ردیف دکمه رد کردن
     skip_button = InlineKeyboardButton("⏭ رد کردن", callback_data="emotion_skip")
     rows = [buttons[:4], buttons[4:], [skip_button]]
     return InlineKeyboardMarkup(rows)
 
 
-# ---------- سرور ساده برای زنده نگه‌داشتن سرویس روی Render ----------
+# ---------- HTTP server برای Render ----------
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -334,9 +440,14 @@ def run_server():
     server.serve_forever()
 
 
-# ---------- منوی دکمه‌ای پایین صفحه ----------
+# ---------- منوی پایین صفحه ----------
 MAIN_MENU = ReplyKeyboardMarkup(
-    [["📝 پیام جدید", "ℹ️ راهنما"], ["📊 آمار من", "🔮 فال امروز"], ["🧠 تست شخصیت", "🎯 چالش امروز"], ["🫙 شیشه احساسات"]],
+    [
+        ["📝 پیام جدید", "ℹ️ راهنما"],
+        ["📊 آمار من", "🔮 فال امروز"],
+        ["🧠 تست شخصیت", "🎯 چالش امروز"],
+        ["🫙 شیشه احساسات", "💹 قیمت لحظه‌ای"],
+    ],
     resize_keyboard=True
 )
 
@@ -346,7 +457,8 @@ HELP_TEXT = (
     "• هیچ‌وقت آیدی یا اسمت برای ادمین نمایش داده نمی‌شه، فقط یه کد عددی.\n"
     "• قبل از ارسال نهایی، یه حس انتخاب می‌کنی، بعد تأیید می‌کنی.\n"
     "• اگه ادمین جواب بده، همینجا برات پیام میاد.\n"
-    "• با ارسال پیام بیشتر، رتبه‌ات بالاتر می‌ره! 🏆"
+    "• با ارسال پیام بیشتر، رتبه‌ات بالاتر می‌ره! 🏆\n"
+    "• با 💹 قیمت لحظه‌ای طلا، دلار و ارز دیجیتال رو ببین."
 )
 
 
@@ -356,8 +468,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     get_or_create_code(uid)
     await update.message.reply_text(
         "🎉 به ربات پیام ناشناس خوش اومدی!\n\n"
-        "🔒 کاملاً ناشناس: هیچ‌وقت آیدی یا اسمت برای ادمین نمایش داده نمی‌شه، فقط یه کد عددی که خودش هم قابل ردیابی به تو نیست.\n\n"
-        "هر پیامی (متن، عکس، ویس، ویدیو یا استیکر) بفرستی، به‌صورت ناشناس برای ادمین ارسال می‌شه.",
+        "🔒 کاملاً ناشناس: هیچ‌وقت آیدی یا اسمت برای ادمین نمایش داده نمی‌شه.\n\n"
+        "هر پیامی بفرستی، به‌صورت ناشناس برای ادمین ارسال می‌شه.",
         reply_markup=MAIN_MENU
     )
 
@@ -372,7 +484,6 @@ async def mystats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = get_or_create_code(uid)
     today = str(date.today())
     sent_today = data["msg_count"].get(uid_str, 0) if data["msg_dates"].get(uid_str) == today else 0
-    # NEW: اطلاعات گیمیفیکیشن
     total_sent = data["msg_total"].get(uid_str, 0)
     rank = get_rank(uid)
     next_rank = get_next_rank_info(uid)
@@ -388,13 +499,11 @@ async def mystats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ---------- جریان ارسال پیام با تأیید قبل از ارسال ----------
+# ---------- جریان ارسال پیام با تأیید ----------
 async def handle_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """هر پیام کاربر عادی اول میاد اینجا و قبل از فوروارد، تأیید گرفته می‌شه."""
     uid = update.effective_user.id
     text = update.message.text or ""
 
-    # دکمه‌های منو
     if text == "ℹ️ راهنما":
         await help_cmd(update, context)
         return
@@ -416,17 +525,17 @@ async def handle_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🫙 شیشه احساسات":
         await feelings_jar_cmd(update, context)
         return
+    if text == "💹 قیمت لحظه‌ای":
+        await price_cmd(update, context)
+        return
 
     if is_blocked(uid):
         await update.message.reply_text("⛔️ شما توسط ادمین مسدود شده‌اید.", reply_markup=MAIN_MENU)
         return
 
-    # پیام رو موقت ذخیره می‌کنیم
     context.user_data["pending_message"] = update.message.message_id
-    # NEW: ریست ایموجی قبلی
     context.user_data["selected_emotion"] = None
 
-    # NEW: اول انتخاب احساس
     await update.message.reply_text(
         "یه حس برای پیامت انتخاب کن 👇",
         reply_markup=emotion_keyboard()
@@ -454,7 +563,6 @@ async def confirm_send_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.message.edit_text("✅ پیام شما با موفقیت ارسال شد.")
 
 
-# NEW: هندلر انتخاب ایموجی احساسی
 async def emotion_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -476,7 +584,6 @@ async def emotion_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.edit_text(preview, reply_markup=confirm_keyboard)
 
 
-# NEW: فال روزانه
 async def fal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     emoji, text = get_daily_fal(uid)
@@ -486,7 +593,6 @@ async def fal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# NEW: شروع تست شخصیت
 async def personality_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["pq_answers"] = []
     await update.message.reply_text(
@@ -496,7 +602,6 @@ async def personality_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# NEW: هندلر جواب‌های تست شخصیت
 async def personality_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -527,7 +632,6 @@ async def personality_answer_handler(update: Update, context: ContextTypes.DEFAU
         )
 
 
-# NEW: چالش روزانه
 async def challenge_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     emoji, text = get_daily_challenge(uid)
@@ -578,7 +682,6 @@ async def challenge_callback_handler(update: Update, context: ContextTypes.DEFAU
         )
 
 
-# NEW: شیشه احساسات - نمایش و ثبت
 async def feelings_jar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     uid_str = str(uid)
@@ -632,7 +735,6 @@ async def feelings_jar_callback(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 
-# NEW: دستور ادمین برای دیدن شیشه احساسات هر کاربر
 async def jar_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -641,7 +743,6 @@ async def jar_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         summary = build_jar_summary_by_code(code)
         await update.message.reply_text(f"🫙 شیشه احساسات کد {code}:\n\n{summary}")
     except (IndexError, ValueError):
-        # نمایش لیست همه کاربرایی که داده دارن
         if not data["feelings_jar"]:
             await update.message.reply_text("هنوز هیچ کسی احساسی ثبت نکرده.")
             return
@@ -661,7 +762,6 @@ async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     chat_id = query.message.chat_id
     code = get_or_create_code(uid)
 
-    # NEW: ایموجی احساسی رو اضافه می‌کنیم
     emotion = context.user_data.get("selected_emotion", "")
     emotion_text = f"حس کاربر: {emotion}\n" if emotion else ""
 
@@ -801,14 +901,13 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"ارسال شد به {sent} نفر. ناموفق: {failed}")
 
 
-# ---------- روتر اصلی پیام‌های متنی ----------
+# ---------- روتر اصلی ----------
 async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     handled = await admin_text_router(update, context)
     if not handled:
         await handle_incoming(update, context)
 
 
-# ---------- روتر پیام‌های مدیا (عکس، ویس، ویدیو، استیکر، فایل) ----------
 async def media_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
@@ -817,10 +916,8 @@ async def media_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     context.user_data["pending_message"] = update.message.message_id
-    # NEW: ریست ایموجی قبلی
     context.user_data["selected_emotion"] = None
 
-    # NEW: اول انتخاب احساس
     await update.message.reply_text(
         "یه حس برای پیامت انتخاب کن 👇",
         reply_markup=emotion_keyboard()
@@ -839,18 +936,14 @@ def main():
     app.add_handler(CommandHandler("block", block_cmd))
     app.add_handler(CommandHandler("unblock", unblock_cmd))
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
-    # NEW: دستور ادمین برای شیشه احساسات
     app.add_handler(CommandHandler("jar", jar_admin_cmd))
+    app.add_handler(CommandHandler("price", price_cmd))  # NEW
 
     app.add_handler(CallbackQueryHandler(reply_button_handler, pattern=r"^reply_\d+$"))
     app.add_handler(CallbackQueryHandler(confirm_send_handler, pattern=r"^(confirm_send|cancel_send)$"))
-    # NEW: هندلر انتخاب ایموجی
     app.add_handler(CallbackQueryHandler(emotion_handler, pattern=r"^emotion_.+$"))
-    # NEW: هندلر تست شخصیت
     app.add_handler(CallbackQueryHandler(personality_answer_handler, pattern=r"^pq_\d+_.+$"))
-    # NEW: هندلر چالش روزانه
     app.add_handler(CallbackQueryHandler(challenge_callback_handler, pattern=r"^challenge_(done|later)$"))
-    # NEW: هندلر شیشه احساسات
     app.add_handler(CallbackQueryHandler(feelings_jar_callback, pattern=r"^jar_.+$"))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
