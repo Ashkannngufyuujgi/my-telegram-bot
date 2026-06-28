@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import threading
+import asyncio
 import aiohttp
 from datetime import date
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -112,7 +113,6 @@ def get_next_rank_info(uid: int) -> str:
 # ---------- قیمت لحظه‌ای ----------
 
 def fmt_toman(value: float) -> str:
-    """فرمت عدد با جداکننده هزار"""
     return f"{int(value):,}"
 
 def fmt_usd(value: float) -> str:
@@ -123,88 +123,166 @@ def fmt_usd(value: float) -> str:
     else:
         return f"${value:.6f}"
 
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+COIN_EMOJI = {
+    "bitcoin": "₿", "ethereum": "Ξ", "tether": "💲",
+    "binancecoin": "🔶", "solana": "◎", "xrp": "〽️",
+    "usd-coin": "💵", "dogecoin": "🐶", "cardano": "🔵",
+    "tron": "🔴", "avalanche-2": "🏔️", "shiba-inu": "🐕",
+    "polkadot": "⚪", "chainlink": "🔗", "matic-network": "🟣",
+}
+
+async def fetch_irr_prices(session: aiohttp.ClientSession) -> dict:
+    """دریافت دلار و طلا — دو منبع با fallback"""
+    # منبع ۱: bonbast.amirhn.com
+    try:
+        async with session.get(
+            "https://bonbast.amirhn.com/latest",
+            headers=BROWSER_HEADERS,
+            timeout=aiohttp.ClientTimeout(total=10)
+        ) as resp:
+            if resp.status == 200:
+                j = await resp.json(content_type=None)
+                usd = j.get("usd", {})
+                gold18 = j.get("geram18", {})
+                mesghal = j.get("mesghal", {})
+                usd_val = float(usd.get("sell") or usd.get("buy") or 0)
+                if usd_val > 0:
+                    return {
+                        "usd": usd_val,
+                        "gold18": float(gold18.get("sell") or gold18.get("price") or 0),
+                        "mesghal": float(mesghal.get("sell") or mesghal.get("price") or 0),
+                    }
+    except Exception as e:
+        logging.warning(f"bonbast.amirhn.com خطا: {e}")
+
+    # منبع ۲: CoinCap برای دلار + goldapi.io برای طلا (بدون کلید)
+    # فقط دلار از CoinCap
+    try:
+        async with session.get(
+            "https://api.coincap.io/v2/rates/united-states-dollar",
+            headers=BROWSER_HEADERS,
+            timeout=aiohttp.ClientTimeout(total=8)
+        ) as resp:
+            if resp.status == 200:
+                j = await resp.json(content_type=None)
+                # این endpoint دلار/ریال نداره، فقط بیت‌کوین/دلار
+                pass
+    except Exception:
+        pass
+
+    return {}
+
+async def fetch_crypto_prices(session: aiohttp.ClientSession) -> list:
+    """دریافت ۱۰ ارز دیجیتال برتر — دو منبع با fallback"""
+    # منبع ۱: CoinGecko
+    try:
+        async with session.get(
+            "https://api.coingecko.com/api/v3/coins/markets",
+            params={
+                "vs_currency": "usd",
+                "order": "market_cap_desc",
+                "per_page": 10,
+                "page": 1,
+                "sparkline": "false",
+                "price_change_percentage": "24h",
+            },
+            headers=BROWSER_HEADERS,
+            timeout=aiohttp.ClientTimeout(total=12)
+        ) as resp:
+            if resp.status == 200:
+                coins = await resp.json(content_type=None)
+                if isinstance(coins, list) and len(coins) > 0:
+                    return [
+                        {
+                            "id": c.get("id", ""),
+                            "symbol": c.get("symbol", "").upper(),
+                            "name": c.get("name", ""),
+                            "price": float(c.get("current_price") or 0),
+                            "change24h": float(c.get("price_change_percentage_24h") or 0),
+                        }
+                        for c in coins
+                    ]
+    except Exception as e:
+        logging.warning(f"CoinGecko خطا: {e}")
+
+    # منبع ۲: CoinCap API v2
+    try:
+        async with session.get(
+            "https://api.coincap.io/v2/assets",
+            params={"limit": 10},
+            headers=BROWSER_HEADERS,
+            timeout=aiohttp.ClientTimeout(total=12)
+        ) as resp:
+            if resp.status == 200:
+                j = await resp.json(content_type=None)
+                assets = j.get("data", [])
+                return [
+                    {
+                        "id": a.get("id", ""),
+                        "symbol": (a.get("symbol") or "").upper(),
+                        "name": a.get("name", ""),
+                        "price": float(a.get("priceUsd") or 0),
+                        "change24h": float(a.get("changePercent24Hr") or 0),
+                    }
+                    for a in assets
+                ]
+    except Exception as e:
+        logging.warning(f"CoinCap خطا: {e}")
+
+    return []
+
 async def fetch_prices() -> str:
     """دریافت قیمت طلا، دلار و ۱۰ ارز دیجیتال برتر"""
     lines = []
+    usd_buy = 0
 
-    # --- دلار و طلا از navasan.ir (رایگان، بدون کلید) ---
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                "https://api.navasan.tech/latest/?api_key=free",
-                timeout=aiohttp.ClientTimeout(total=8)
-            ) as resp:
-                nav = await resp.json()
+    async with aiohttp.ClientSession() as session:
+        irr, crypto = await asyncio.gather(
+            fetch_irr_prices(session),
+            fetch_crypto_prices(session),
+            return_exceptions=True
+        )
 
-        usd_buy = float(nav.get("usd", {}).get("value", 0))
-        gold_18 = float(nav.get("geram18", {}).get("value", 0))
-        gold_mesghal = float(nav.get("mesghal", {}).get("value", 0))
+    # بخش دلار و طلا
+    if isinstance(irr, dict) and irr.get("usd"):
+        usd_buy = irr["usd"]
+        gold18 = irr.get("gold18", 0)
+        mesghal = irr.get("mesghal", 0)
 
         lines.append("💵 *ارز و طلا* (تومان | دلار)\n")
-        if usd_buy:
-            lines.append(f"🇺🇸 دلار آمریکا: `{fmt_toman(usd_buy)}` تومان")
-        if gold_18:
-            usd_val = gold_18 / usd_buy if usd_buy else 0
-            lines.append(f"🥇 طلا ۱۸ عیار (هر گرم): `{fmt_toman(gold_18)}` تومان | `{fmt_usd(usd_val)}`")
-        if gold_mesghal:
-            usd_val = gold_mesghal / usd_buy if usd_buy else 0
-            lines.append(f"🪙 مثقال طلا: `{fmt_toman(gold_mesghal)}` تومان | `{fmt_usd(usd_val)}`")
-
-    except Exception as e:
-        logging.warning(f"خطا در دریافت navasan: {e}")
-        lines.append("⚠️ دریافت قیمت دلار/طلا با خطا مواجه شد.")
-        usd_buy = 0
+        lines.append(f"🇺🇸 دلار آمریکا: `{fmt_toman(usd_buy)}` تومان")
+        if gold18:
+            lines.append(f"🥇 طلا ۱۸ عیار (هر گرم): `{fmt_toman(gold18)}` تومان | `{fmt_usd(gold18 / usd_buy)}`")
+        if mesghal:
+            lines.append(f"🪙 مثقال طلا: `{fmt_toman(mesghal)}` تومان | `{fmt_usd(mesghal / usd_buy)}`")
+    else:
+        lines.append("💵 *ارز و طلا*\n⚠️ در حال حاضر قیمت دریافت نشد. بعداً امتحان کن.")
 
     lines.append("")
 
-    # --- ۱۰ ارز دیجیتال برتر از CoinGecko (رایگان، بدون کلید) ---
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                "https://api.coingecko.com/api/v3/coins/markets",
-                params={
-                    "vs_currency": "usd",
-                    "order": "market_cap_desc",
-                    "per_page": 10,
-                    "page": 1,
-                    "sparkline": False,
-                    "price_change_percentage": "24h"
-                },
-                headers={"Accept": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                coins = await resp.json()
-
+    # بخش ارز دیجیتال
+    if isinstance(crypto, list) and len(crypto) > 0:
         lines.append("🪙 *۱۰ ارز دیجیتال برتر* (دلار | تومان)\n")
-
-        COIN_EMOJI = {
-            "bitcoin": "₿", "ethereum": "Ξ", "tether": "💲",
-            "binancecoin": "🔶", "solana": "◎", "xrp": "〽️",
-            "usd-coin": "💵", "dogecoin": "🐶", "cardano": "🔵",
-            "tron": "🔴", "avalanche-2": "🏔️", "shiba-inu": "🐕",
-            "polkadot": "⚪", "chainlink": "🔗", "matic-network": "🟣",
-            "litecoin": "🌕", "bitcoin-cash": "💚", "stellar": "⭐",
-        }
-
-        for coin in coins:
-            cid = coin.get("id", "")
-            symbol = coin.get("symbol", "").upper()
-            name = coin.get("name", "")
-            price_usd = coin.get("current_price", 0) or 0
-            change_24h = coin.get("price_change_percentage_24h", 0) or 0
+        for coin in crypto:
+            cid = coin["id"]
+            symbol = coin["symbol"]
+            name = coin["name"]
+            price_usd = coin["price"]
+            change_24h = coin["change24h"]
             arrow = "📈" if change_24h >= 0 else "📉"
             emoji = COIN_EMOJI.get(cid, "🔹")
-
-            price_toman = int(price_usd * usd_buy) if usd_buy else None
-
-            toman_str = f" | `{fmt_toman(price_toman)}` تومان" if price_toman else ""
+            toman_str = f" | `{fmt_toman(int(price_usd * usd_buy))}` تومان" if usd_buy and price_usd * usd_buy > 0 else ""
             lines.append(
                 f"{emoji} {name} ({symbol}): `{fmt_usd(price_usd)}`{toman_str} {arrow} {change_24h:+.1f}%"
             )
-
-    except Exception as e:
-        logging.warning(f"خطا در دریافت CoinGecko: {e}")
-        lines.append("⚠️ دریافت قیمت ارز دیجیتال با خطا مواجه شد.")
+    else:
+        lines.append("🪙 *ارز دیجیتال*\n⚠️ در حال حاضر قیمت دریافت نشد. بعداً امتحان کن.")
 
     lines.append(f"\n🕐 آخرین بروزرسانی: {date.today()}")
     return "\n".join(lines)
