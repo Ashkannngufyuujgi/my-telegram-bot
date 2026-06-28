@@ -138,8 +138,10 @@ COIN_EMOJI = {
 }
 
 async def fetch_irr_prices(session: aiohttp.ClientSession) -> dict:
-    """دریافت دلار و طلا — دو منبع با fallback"""
-    # منبع ۱: bonbast.amirhn.com
+    """دریافت دلار و طلا — چند منبع با fallback"""
+    import re
+
+    # منبع ۱: bonbast.amirhn.com JSON
     try:
         async with session.get(
             "https://bonbast.amirhn.com/latest",
@@ -151,32 +153,66 @@ async def fetch_irr_prices(session: aiohttp.ClientSession) -> dict:
                 usd = j.get("usd", {})
                 gold18 = j.get("geram18", {})
                 mesghal = j.get("mesghal", {})
-                usd_val = float(usd.get("sell") or usd.get("buy") or 0)
+                usd_val = float(usd.get("sell") or usd.get("buy") or 0) if isinstance(usd, dict) else float(usd or 0)
                 if usd_val > 0:
                     return {
                         "usd": usd_val,
-                        "gold18": float(gold18.get("sell") or gold18.get("price") or 0),
-                        "mesghal": float(mesghal.get("sell") or mesghal.get("price") or 0),
+                        "gold18": float(gold18.get("sell") or gold18.get("price") or 0) if isinstance(gold18, dict) else float(gold18 or 0),
+                        "mesghal": float(mesghal.get("sell") or mesghal.get("price") or 0) if isinstance(mesghal, dict) else float(mesghal or 0),
                     }
     except Exception as e:
-        logging.warning(f"bonbast.amirhn.com خطا: {e}")
+        logging.warning(f"bonbast.amirhn.com error: {e}")
 
-    # منبع ۲: CoinCap برای دلار + goldapi.io برای طلا (بدون کلید)
-    # فقط دلار از CoinCap
+    # منبع ۲: bonbast.com/json
     try:
         async with session.get(
-            "https://api.coincap.io/v2/rates/united-states-dollar",
+            "https://www.bonbast.com/json",
             headers=BROWSER_HEADERS,
-            timeout=aiohttp.ClientTimeout(total=8)
+            timeout=aiohttp.ClientTimeout(total=10)
         ) as resp:
             if resp.status == 200:
                 j = await resp.json(content_type=None)
-                # این endpoint دلار/ریال نداره، فقط بیت‌کوین/دلار
-                pass
-    except Exception:
-        pass
+                usd_val = float(j.get("usd1") or j.get("usd") or 0)
+                if usd_val > 0:
+                    return {
+                        "usd": usd_val,
+                        "gold18": float(j.get("geram18") or 0),
+                        "mesghal": float(j.get("mesghal") or 0),
+                    }
+    except Exception as e:
+        logging.warning(f"bonbast.com/json error: {e}")
+
+    # منبع ۳: scraping صفحه اصلی bonbast.com
+    try:
+        html_headers = {
+            "User-Agent": BROWSER_HEADERS["User-Agent"],
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        async with session.get(
+            "https://www.bonbast.com/",
+            headers=html_headers,
+            timeout=aiohttp.ClientTimeout(total=12)
+        ) as resp:
+            if resp.status == 200:
+                html = await resp.text()
+                pat_usd = re.compile(r'id="usd1"[^>]*>([\d,]+)<')
+                pat_g18 = re.compile(r'id="geram18"[^>]*>([\d,]+)<')
+                pat_mes = re.compile(r'id="mesghal"[^>]*>([\d,]+)<')
+                m_usd = pat_usd.search(html)
+                m_g18 = pat_g18.search(html)
+                m_mes = pat_mes.search(html)
+                if m_usd:
+                    return {
+                        "usd": float(m_usd.group(1).replace(",", "")),
+                        "gold18": float(m_g18.group(1).replace(",", "")) if m_g18 else 0,
+                        "mesghal": float(m_mes.group(1).replace(",", "")) if m_mes else 0,
+                    }
+    except Exception as e:
+        logging.warning(f"bonbast scraping error: {e}")
 
     return {}
+
 
 async def fetch_crypto_prices(session: aiohttp.ClientSession) -> list:
     """دریافت ۱۰ ارز دیجیتال برتر — دو منبع با fallback"""
