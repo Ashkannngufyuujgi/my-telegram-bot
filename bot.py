@@ -138,70 +138,87 @@ COIN_EMOJI = {
 }
 
 async def fetch_irr_prices(session: aiohttp.ClientSession) -> dict:
-    """
-    دریافت نرخ دلار/تومان از exchangerate-api و طلا از metals-api
-    هر دو روی سرور بین‌المللی کار می‌کنن
-    """
     result = {}
 
-    # نرخ دلار از ExchangeRate-API (رایگان، بدون کلید، بین‌المللی)
-    # endpoint عمومی: latest/USD
-    USD_APIS = [
-        "https://open.er-api.com/v6/latest/USD",
-        "https://api.exchangerate-api.com/v4/latest/USD",
-        "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json",
-    ]
-
-    irr_per_usd = 0
-    for url in USD_APIS:
+    # اول چک می‌کنیم ادمین نرخ دستی تنظیم کرده یا نه
+    manual_usd = os.getenv("USD_TOMAN")
+    if manual_usd:
         try:
-            async with session.get(url, headers=BROWSER_HEADERS, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                if resp.status == 200:
-                    j = await resp.json(content_type=None)
-                    # open.er-api و exchangerate-api
-                    rates = j.get("rates") or j.get("usd") or {}
-                    irr = float(rates.get("IRR") or rates.get("irr") or 0)
-                    if irr > 0:
-                        irr_per_usd = irr / 10  # IRR به تومان
-                        logging.info(f"USD rate from {url}: {irr_per_usd} toman")
-                        break
-        except Exception as e:
-            logging.warning(f"USD API {url} error: {e}")
+            result["usd"] = float(manual_usd)
+            logging.info(f"USD rate from env: {result['usd']} toman")
+        except ValueError:
+            pass
 
-    if irr_per_usd > 0:
-        result["usd"] = irr_per_usd
-
-    # طلای جهانی از metals.live (رایگان، بدون کلید)
-    try:
-        async with session.get(
-            "https://api.metals.live/v1/spot",
-            headers=BROWSER_HEADERS,
-            timeout=aiohttp.ClientTimeout(total=8)
-        ) as resp:
-            if resp.status == 200:
-                metals = await resp.json(content_type=None)
-                # پاسخ: [{"gold": 3300.5}, ...]
-                gold_usd_oz = 0
-                for item in metals:
-                    if isinstance(item, dict):
-                        gold_usd_oz = float(item.get("gold") or 0)
-                        if gold_usd_oz > 0:
+    # اگه نرخ دستی نبود، از API های ایرانی بگیر (نرخ بازار آزاد)
+    if not result.get("usd"):
+        IRAN_APIS = [
+            {
+                "url": "https://brsapi.ir/FreeTsetmcBourseApi/Api_Free_Gold_Currency.json",
+                "extractor": lambda j: float(
+                    next((
+                        item.get("price", 0)
+                        for item in j.get("currency", [])
+                        if str(item.get("symbol", "")).upper() in ("USD", "DOLLAR", "دلار")
+                    ), 0)
+                )
+            },
+            {
+                "url": "https://brsapi.ir/FreeTsetmcBourseApi/Api_Free_Gold_Currency_v2.json",
+                "extractor": lambda j: float((j.get("USD") or j.get("usd") or {}).get("price", 0))
+            },
+            {
+                "url": "https://api.priceto.day/v1/latest/irr/usd",
+                "extractor": lambda j: float(j.get("price", 0)) / 10  # IRR به تومان
+            },
+        ]
+        for api in IRAN_APIS:
+            try:
+                async with session.get(
+                    api["url"],
+                    headers=BROWSER_HEADERS,
+                    timeout=aiohttp.ClientTimeout(total=8)
+                ) as resp:
+                    if resp.status == 200:
+                        j = await resp.json(content_type=None)
+                        price = api["extractor"](j)
+                        if price > 10000:  # sanity check
+                            result["usd"] = price
+                            logging.info(f"USD from {api['url']}: {price}")
                             break
-                if gold_usd_oz > 0 and irr_per_usd > 0:
-                    gold_usd_gram = gold_usd_oz / 31.1035
-                    gold18_usd = gold_usd_gram * 0.75  # ۱۸ عیار = ۷۵٪
-                    result["gold18"] = gold18_usd * irr_per_usd
-                    result["mesghal"] = gold18_usd * 4.608 * irr_per_usd  # ۱ مثقال = ۴.۶۰۸ گرم
-                    logging.info(f"Gold: ${gold_usd_oz}/oz, 18k gram toman: {result['gold18']:.0f}")
-    except Exception as e:
-        logging.warning(f"metals.live error: {e}")
+                        else:
+                            logging.warning(f"USD price too low from {api['url']}: {price} — raw: {str(j)[:300]}")
+            except Exception as e:
+                logging.warning(f"Iran USD API error ({api['url']}): {e}")
+
+    # طلا از metals.live بر اساس نرخ بازار آزاد
+    irr_per_usd = result.get("usd", 0)
+    if irr_per_usd > 0:
+        try:
+            async with session.get(
+                "https://api.metals.live/v1/spot",
+                headers=BROWSER_HEADERS,
+                timeout=aiohttp.ClientTimeout(total=8)
+            ) as resp:
+                if resp.status == 200:
+                    metals = await resp.json(content_type=None)
+                    gold_usd_oz = 0
+                    for item in metals:
+                        if isinstance(item, dict):
+                            gold_usd_oz = float(item.get("gold") or 0)
+                            if gold_usd_oz > 0:
+                                break
+                    if gold_usd_oz > 0:
+                        gold_usd_gram = gold_usd_oz / 31.1035
+                        gold18_usd = gold_usd_gram * 0.75
+                        result["gold18"] = gold18_usd * irr_per_usd
+                        result["mesghal"] = gold18_usd * 4.608 * irr_per_usd
+        except Exception as e:
+            logging.warning(f"metals.live error: {e}")
 
     return result
 
 
 async def fetch_crypto_prices(session: aiohttp.ClientSession) -> list:
-    """دریافت ۱۰ ارز دیجیتال برتر — دو منبع با fallback"""
-    # منبع ۱: CoinGecko
     try:
         async with session.get(
             "https://api.coingecko.com/api/v3/coins/markets",
@@ -232,7 +249,6 @@ async def fetch_crypto_prices(session: aiohttp.ClientSession) -> list:
     except Exception as e:
         logging.warning(f"CoinGecko خطا: {e}")
 
-    # منبع ۲: CoinCap API v2
     try:
         async with session.get(
             "https://api.coincap.io/v2/assets",
@@ -259,7 +275,6 @@ async def fetch_crypto_prices(session: aiohttp.ClientSession) -> list:
     return []
 
 async def fetch_prices() -> str:
-    """دریافت قیمت طلا، دلار و ۱۰ ارز دیجیتال برتر"""
     lines = []
     usd_buy = 0
 
@@ -270,7 +285,6 @@ async def fetch_prices() -> str:
             return_exceptions=True
         )
 
-    # بخش دلار و طلا
     if isinstance(irr, dict) and irr.get("usd"):
         usd_buy = irr["usd"]
         gold18 = irr.get("gold18", 0)
@@ -287,7 +301,6 @@ async def fetch_prices() -> str:
 
     lines.append("")
 
-    # بخش ارز دیجیتال
     if isinstance(crypto, list) and len(crypto) > 0:
         lines.append("<b>🪙 ۱۰ ارز دیجیتال برتر</b> (دلار | تومان)\n")
         for coin in crypto:
@@ -310,38 +323,32 @@ async def fetch_prices() -> str:
 
 
 async def debugprice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دستور موقت برای دیباگ قیمت"""
-    import re, traceback
+    if update.effective_user.id != ADMIN_ID:
+        return
     results = []
     urls = [
-        ("bonbast.amirhn.com", "https://bonbast.amirhn.com/latest", "json"),
-        ("bonbast.com/json", "https://www.bonbast.com/json", "json"),
-        ("bonbast.com/", "https://www.bonbast.com/", "html"),
+        ("brsapi v1", "https://brsapi.ir/FreeTsetmcBourseApi/Api_Free_Gold_Currency.json", "json"),
+        ("brsapi v2", "https://brsapi.ir/FreeTsetmcBourseApi/Api_Free_Gold_Currency_v2.json", "json"),
+        ("priceto.day", "https://api.priceto.day/v1/latest/irr/usd", "json"),
     ]
     async with aiohttp.ClientSession() as session:
         for name, url, kind in urls:
             try:
                 async with session.get(url, headers=BROWSER_HEADERS, timeout=aiohttp.ClientTimeout(total=8)) as resp:
                     body = await resp.text()
-                    if kind == "json":
-                        results.append(f"✅ {name} [{resp.status}]\n<code>{body[:200]}</code>")
-                    else:
-                        snippet = body[:300].replace("<","&lt;").replace(">","&gt;")
-                        results.append(f"✅ {name} [{resp.status}]\n<code>{snippet}</code>")
+                    snippet = body[:400].replace("<", "&lt;").replace(">", "&gt;")
+                    results.append(f"✅ {name} [{resp.status}]\n<code>{snippet}</code>")
             except Exception as e:
                 results.append(f"❌ {name}: {e}")
     await update.message.reply_text("\n\n".join(results), parse_mode="HTML")
 
 
 async def price_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نمایش قیمت لحظه‌ای"""
     waiting_msg = await update.message.reply_text("⏳ در حال دریافت قیمت‌ها...")
     try:
         text = await fetch_prices()
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=MAIN_MENU)
     except Exception as e:
-        import traceback
-        err_detail = traceback.format_exc()
         logging.exception("خطا در price_cmd")
         await update.message.reply_text(
             f"⚠️ خطای دقیق:\n<code>{str(e)[:300]}</code>",
@@ -890,6 +897,23 @@ async def jar_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("\n".join(lines))
 
 
+async def setusd_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        rate = float(context.args[0].replace(",", ""))
+        if rate < 10000:
+            await update.message.reply_text("❌ عدد خیلی کمه. مثال: /setusd 95000")
+            return
+        os.environ["USD_TOMAN"] = str(rate)
+        await update.message.reply_text(f"✅ نرخ دلار تنظیم شد: {int(rate):,} تومان")
+    except (IndexError, ValueError):
+        current = os.getenv("USD_TOMAN", "تنظیم نشده")
+        await update.message.reply_text(
+            f"نرخ فعلی: {current}\n\nبرای تنظیم: /setusd عدد\nمثال: /setusd 95000"
+        )
+
+
 async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, msg_id: int):
     query = update.callback_query
     uid = query.from_user.id
@@ -1071,8 +1095,9 @@ def main():
     app.add_handler(CommandHandler("unblock", unblock_cmd))
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("jar", jar_admin_cmd))
+    app.add_handler(CommandHandler("setusd", setusd_cmd))
     app.add_handler(CommandHandler("price", price_cmd))
-    app.add_handler(CommandHandler("debugprice", debugprice_cmd))  # NEW
+    app.add_handler(CommandHandler("debugprice", debugprice_cmd))
 
     app.add_handler(CallbackQueryHandler(reply_button_handler, pattern=r"^reply_\d+$"))
     app.add_handler(CallbackQueryHandler(confirm_send_handler, pattern=r"^(confirm_send|cancel_send)$"))
