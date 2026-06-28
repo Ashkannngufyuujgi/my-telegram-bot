@@ -138,80 +138,65 @@ COIN_EMOJI = {
 }
 
 async def fetch_irr_prices(session: aiohttp.ClientSession) -> dict:
-    """دریافت دلار و طلا — چند منبع با fallback"""
-    import re
+    """
+    دریافت نرخ دلار/تومان از exchangerate-api و طلا از metals-api
+    هر دو روی سرور بین‌المللی کار می‌کنن
+    """
+    result = {}
 
-    # منبع ۱: bonbast.amirhn.com JSON
+    # نرخ دلار از ExchangeRate-API (رایگان، بدون کلید، بین‌المللی)
+    # endpoint عمومی: latest/USD
+    USD_APIS = [
+        "https://open.er-api.com/v6/latest/USD",
+        "https://api.exchangerate-api.com/v4/latest/USD",
+        "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json",
+    ]
+
+    irr_per_usd = 0
+    for url in USD_APIS:
+        try:
+            async with session.get(url, headers=BROWSER_HEADERS, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                if resp.status == 200:
+                    j = await resp.json(content_type=None)
+                    # open.er-api و exchangerate-api
+                    rates = j.get("rates") or j.get("usd") or {}
+                    irr = float(rates.get("IRR") or rates.get("irr") or 0)
+                    if irr > 0:
+                        irr_per_usd = irr / 10  # IRR به تومان
+                        logging.info(f"USD rate from {url}: {irr_per_usd} toman")
+                        break
+        except Exception as e:
+            logging.warning(f"USD API {url} error: {e}")
+
+    if irr_per_usd > 0:
+        result["usd"] = irr_per_usd
+
+    # طلای جهانی از metals.live (رایگان، بدون کلید)
     try:
         async with session.get(
-            "https://bonbast.amirhn.com/latest",
+            "https://api.metals.live/v1/spot",
             headers=BROWSER_HEADERS,
-            timeout=aiohttp.ClientTimeout(total=10)
+            timeout=aiohttp.ClientTimeout(total=8)
         ) as resp:
             if resp.status == 200:
-                j = await resp.json(content_type=None)
-                usd = j.get("usd", {})
-                gold18 = j.get("geram18", {})
-                mesghal = j.get("mesghal", {})
-                usd_val = float(usd.get("sell") or usd.get("buy") or 0) if isinstance(usd, dict) else float(usd or 0)
-                if usd_val > 0:
-                    return {
-                        "usd": usd_val,
-                        "gold18": float(gold18.get("sell") or gold18.get("price") or 0) if isinstance(gold18, dict) else float(gold18 or 0),
-                        "mesghal": float(mesghal.get("sell") or mesghal.get("price") or 0) if isinstance(mesghal, dict) else float(mesghal or 0),
-                    }
+                metals = await resp.json(content_type=None)
+                # پاسخ: [{"gold": 3300.5}, ...]
+                gold_usd_oz = 0
+                for item in metals:
+                    if isinstance(item, dict):
+                        gold_usd_oz = float(item.get("gold") or 0)
+                        if gold_usd_oz > 0:
+                            break
+                if gold_usd_oz > 0 and irr_per_usd > 0:
+                    gold_usd_gram = gold_usd_oz / 31.1035
+                    gold18_usd = gold_usd_gram * 0.75  # ۱۸ عیار = ۷۵٪
+                    result["gold18"] = gold18_usd * irr_per_usd
+                    result["mesghal"] = gold18_usd * 4.608 * irr_per_usd  # ۱ مثقال = ۴.۶۰۸ گرم
+                    logging.info(f"Gold: ${gold_usd_oz}/oz, 18k gram toman: {result['gold18']:.0f}")
     except Exception as e:
-        logging.warning(f"bonbast.amirhn.com error: {e}")
+        logging.warning(f"metals.live error: {e}")
 
-    # منبع ۲: bonbast.com/json
-    try:
-        async with session.get(
-            "https://www.bonbast.com/json",
-            headers=BROWSER_HEADERS,
-            timeout=aiohttp.ClientTimeout(total=10)
-        ) as resp:
-            if resp.status == 200:
-                j = await resp.json(content_type=None)
-                usd_val = float(j.get("usd1") or j.get("usd") or 0)
-                if usd_val > 0:
-                    return {
-                        "usd": usd_val,
-                        "gold18": float(j.get("geram18") or 0),
-                        "mesghal": float(j.get("mesghal") or 0),
-                    }
-    except Exception as e:
-        logging.warning(f"bonbast.com/json error: {e}")
-
-    # منبع ۳: scraping صفحه اصلی bonbast.com
-    try:
-        html_headers = {
-            "User-Agent": BROWSER_HEADERS["User-Agent"],
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-        async with session.get(
-            "https://www.bonbast.com/",
-            headers=html_headers,
-            timeout=aiohttp.ClientTimeout(total=12)
-        ) as resp:
-            if resp.status == 200:
-                html = await resp.text()
-                pat_usd = re.compile(r'id="usd1"[^>]*>([\d,]+)<')
-                pat_g18 = re.compile(r'id="geram18"[^>]*>([\d,]+)<')
-                pat_mes = re.compile(r'id="mesghal"[^>]*>([\d,]+)<')
-                m_usd = pat_usd.search(html)
-                m_g18 = pat_g18.search(html)
-                m_mes = pat_mes.search(html)
-                if m_usd:
-                    return {
-                        "usd": float(m_usd.group(1).replace(",", "")),
-                        "gold18": float(m_g18.group(1).replace(",", "")) if m_g18 else 0,
-                        "mesghal": float(m_mes.group(1).replace(",", "")) if m_mes else 0,
-                    }
-    except Exception as e:
-        logging.warning(f"bonbast scraping error: {e}")
-
-    return {}
+    return result
 
 
 async def fetch_crypto_prices(session: aiohttp.ClientSession) -> list:
@@ -322,6 +307,30 @@ async def fetch_prices() -> str:
 
     lines.append(f"\n🕐 آخرین بروزرسانی: {date.today()}")
     return "\n".join(lines)
+
+
+async def debugprice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دستور موقت برای دیباگ قیمت"""
+    import re, traceback
+    results = []
+    urls = [
+        ("bonbast.amirhn.com", "https://bonbast.amirhn.com/latest", "json"),
+        ("bonbast.com/json", "https://www.bonbast.com/json", "json"),
+        ("bonbast.com/", "https://www.bonbast.com/", "html"),
+    ]
+    async with aiohttp.ClientSession() as session:
+        for name, url, kind in urls:
+            try:
+                async with session.get(url, headers=BROWSER_HEADERS, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                    body = await resp.text()
+                    if kind == "json":
+                        results.append(f"✅ {name} [{resp.status}]\n<code>{body[:200]}</code>")
+                    else:
+                        snippet = body[:300].replace("<","&lt;").replace(">","&gt;")
+                        results.append(f"✅ {name} [{resp.status}]\n<code>{snippet}</code>")
+            except Exception as e:
+                results.append(f"❌ {name}: {e}")
+    await update.message.reply_text("\n\n".join(results), parse_mode="HTML")
 
 
 async def price_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1062,7 +1071,8 @@ def main():
     app.add_handler(CommandHandler("unblock", unblock_cmd))
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("jar", jar_admin_cmd))
-    app.add_handler(CommandHandler("price", price_cmd))  # NEW
+    app.add_handler(CommandHandler("price", price_cmd))
+    app.add_handler(CommandHandler("debugprice", debugprice_cmd))  # NEW
 
     app.add_handler(CallbackQueryHandler(reply_button_handler, pattern=r"^reply_\d+$"))
     app.add_handler(CallbackQueryHandler(confirm_send_handler, pattern=r"^(confirm_send|cancel_send)$"))
