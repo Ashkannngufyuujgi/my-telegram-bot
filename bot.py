@@ -20,7 +20,7 @@ logging.basicConfig(
 )
 
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_ID", "").split(",")]
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")  # مثلاً @mindarchive
 
 DATA_FILE = "data.json"
@@ -94,7 +94,7 @@ def join_keyboard() -> InlineKeyboardMarkup:
 
 async def check_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     uid = update.effective_user.id
-    if uid == ADMIN_ID:
+    if uid in ADMIN_IDS:
         return True
     if not await is_member(context.bot, uid):
         await update.message.reply_text(
@@ -192,7 +192,7 @@ WELCOME_TEXT = (
 # ---------- دستورات اصلی ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if uid != ADMIN_ID and not await is_member(context.bot, uid):
+    if uid not in ADMIN_IDS and not await is_member(context.bot, uid):
         await update.message.reply_text(
             "𝐌𝐢𝐧𝐝 𝐀𝐫𝐜𝐡𝐢𝐯𝐞⟆⸙\n\n"
             "🔒 برای ورود به آرشیو ذهن باید اول عضو کانال بشی 👇\n\n"
@@ -272,12 +272,12 @@ async def confirm_send_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.message.edit_text("پیامی پیدا نشد.")
         return
 
-    await deliver_to_admin(update, context, msg_id)
+    await deliver_to_admins(update, context, msg_id)
     context.user_data["pending_message"] = None
     await query.message.edit_text(f"✅ {random.choice(SEND_CONFIRMATIONS)}")
 
 
-async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, msg_id: int):
+async def deliver_to_admins(update: Update, context: ContextTypes.DEFAULT_TYPE, msg_id: int):
     query = update.callback_query
     uid = query.from_user.id
     chat_id = query.message.chat_id
@@ -288,20 +288,22 @@ async def deliver_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         InlineKeyboardButton("👁 خوندم", callback_data=f"read_{code}_{uid}"),
     ]])
 
-    try:
-        await context.bot.copy_message(
-            chat_id=ADMIN_ID,
-            from_chat_id=chat_id,
-            message_id=msg_id
-        )
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=f"📩 پیام ناشناس\nکد کاربر: {code}\n(پیام بالا 👆)",
-            reply_markup=keyboard
-        )
-        increment_message_count(uid)
-    except Exception:
-        logging.exception("خطا در ارسال پیام به ادمین")
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.copy_message(
+                chat_id=admin_id,
+                from_chat_id=chat_id,
+                message_id=msg_id
+            )
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=f"📩 پیام ناشناس\nکد کاربر: {code}\n(پیام بالا 👆)",
+                reply_markup=keyboard
+            )
+        except Exception:
+            logging.exception(f"خطا در ارسال پیام به ادمین {admin_id}")
+
+    increment_message_count(uid)
 
 
 # ---------- هندلر مدیا (پیام ناشناس) ----------
@@ -339,12 +341,12 @@ async def media_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def read_receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("✅ علامت‌گذاری شد!")
-    if query.from_user.id != ADMIN_ID:
+    if query.from_user.id not in ADMIN_IDS:
         return
     parts = query.data.split("_")
     uid = int(parts[2])
     try:
-        await context.bot.send_message(uid, "👁 هادی پیامتو خوند.")
+        await context.bot.send_message(uid, "👁 ادمین‌ها پیامتو خوندن.")
         await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("✏️ پاسخ", callback_data=f"reply_{parts[1]}"),
             InlineKeyboardButton("✅ خونده شد", callback_data="noop"),
@@ -361,7 +363,7 @@ async def noop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reply_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.from_user.id != ADMIN_ID:
+    if query.from_user.id not in ADMIN_IDS:
         return
     code = query.data.split("_")[1]
     context.user_data["awaiting_reply_to"] = int(code)
@@ -369,14 +371,14 @@ async def reply_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def admin_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id not in ADMIN_IDS:
         return False
     code = context.user_data.get("awaiting_reply_to")
     if code is None:
         return False
     uid = find_uid_by_code(code)
     if uid:
-        await context.bot.send_message(uid, f"📨 پاسخ هادی:\n{update.message.text}")
+        await context.bot.send_message(uid, f"📨 پاسخ ادمین‌ها:\n{update.message.text}")
         await update.message.reply_text("ارسال شد ✔️")
     else:
         await update.message.reply_text("کاربر پیدا نشد.")
@@ -385,7 +387,7 @@ async def admin_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def reply_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id not in ADMIN_IDS:
         return
     try:
         parts = update.message.text.split(maxsplit=2)
@@ -395,7 +397,7 @@ async def reply_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         code = int(parts[1])
         uid = find_uid_by_code(code)
         if uid:
-            await context.bot.send_message(uid, f"📨 پاسخ هادی:\n{parts[2]}")
+            await context.bot.send_message(uid, f"📨 پاسخ ادمین‌ها:\n{parts[2]}")
             await update.message.reply_text("ارسال شد ✔️")
         else:
             await update.message.reply_text("کاربر پیدا نشد.")
@@ -404,7 +406,7 @@ async def reply_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id not in ADMIN_IDS:
         return
     total = len(data["user_map"])
     blocked = len(data["blocked"])
@@ -419,7 +421,7 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def block_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id not in ADMIN_IDS:
         return
     try:
         code = int(context.args[0])
@@ -436,7 +438,7 @@ async def block_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def unblock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id not in ADMIN_IDS:
         return
     try:
         code = int(context.args[0])
@@ -452,7 +454,7 @@ async def unblock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id not in ADMIN_IDS:
         return
     text = update.message.text.partition(" ")[2]
     if not text:
